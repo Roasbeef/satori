@@ -39,6 +39,12 @@ class FrameHeader(object):
     def __init__(self):
         pass
 
+    def __repr__(self):
+        pass
+
+    def __str__(self):
+        pass
+
     @classmethod
     def from_raw_bytes(frame_bytes):
         pass
@@ -76,7 +82,7 @@ class Frame(object):
     def from_raw_conn(self, conn):
         pass
 
-    def deserialize(self, frame_body):
+    def deserialize(self, frame_payload):
         raise NotImplementedError
 
     def serialize(self):
@@ -108,7 +114,7 @@ class DataFrame(Frame):
         self.pad_low = None
         self.padding = None
 
-    def deserialize(self, frame_body):
+    def deserialize(self, frame_payload):
         pass
 
     def serialize(self):
@@ -138,7 +144,7 @@ class HeadersFrame(Frame):
     def __init__(self, stream_id):
         super().__init__(stream_id)
 
-    def deserialize(self, frame_body):
+    def deserialize(self, frame_payload):
         pass
 
     def serialize(self):
@@ -159,7 +165,7 @@ class PriorityFrame(Frame):
     def __init__(self, stream_id):
         super().__init__(stream_id)
 
-    def deserialize(self, frame_body):
+    def deserialize(self, frame_payload):
         pass
 
     def serialize(self):
@@ -180,7 +186,7 @@ class RstStreamFrame(Frame):
     def __init__(self, stream_id):
         super().__init__(stream_id)
 
-    def deserialize(self, frame_body):
+    def deserialize(self, frame_payload):
         pass
 
     def serialize(self):
@@ -210,11 +216,12 @@ class SettingsFrame(Frame):
     def __init__(self, stream_id):
         super().__init__(stream_id)
 
-    def deserialize(self, frame_body):
+    def deserialize(self, frame_payload):
         pass
 
     def serialize(self):
         pass
+
 
 class PushPromise(Frame):
     """
