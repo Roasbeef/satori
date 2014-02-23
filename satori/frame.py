@@ -10,6 +10,19 @@ import io
 MAX_FRAME_SIZE = (2 ** 14) - 1
 
 
+class FrameType(Enum):
+    DATA = 0x00
+    HEADERS = 0x1
+    PRIORITY = 0x2
+    RST_STREAM = 0x3
+    SETTINGS = 0x4
+    PUSH_PROMISE = 0x5
+    PING = 0x6
+    GO_AWAY = 0x7
+    WINDOW_UPDATE = 0x8
+    CONTINUATION = 0x9
+
+
 class ErrorCodes(Enum):
     NO_ERROR = 0x0
     PROTOCOL_ERROR = 0x01
@@ -88,7 +101,11 @@ class FrameHeader(object):
 
     @classmethod
     def from_frame(cls, frame):
-        return cls(len(frame), frame.frame_type, frame.flags, frame.stream_id)
+        raw_flags = 0
+        for flag_type in frame.flags:
+            raw_flags |= flag_type.value
+
+        return cls(len(frame), frame.frame_type, raw_flags, frame.stream_id)
 
     def serialize(self):
         return struct.pack(
@@ -105,15 +122,16 @@ class Frame(object):
     frame_type = None
     defined_flags = None
 
-    def __init__(self, stream_id):
+    def __init__(self, stream_id, flags=None, length=0):
         # Stream_id can never be 0x0, throw error if so.
         # Only the initial response, to an HTTP/1.1 update
         # request can have an identifier of 0x1? or 0x0?
         self.stream_id = stream_id
-        self.flags = set()
+        self.flags = flags if flags is not None else set()
+        self.length = length
 
     def __len__(self):
-        raise NotImplementedError
+        return self.length
 
     def __repr__(self):
         pass
@@ -129,7 +147,7 @@ class Frame(object):
     def parse_flags(self, flag_byte):
         for flag_type in self.defined_flags:
             if flag_byte & flag_type.value:
-                self.flags.add(flag)
+                self.flags.add(flag_type)
 
     def deserialize(self, frame_payload):
         raise NotImplementedError
@@ -151,7 +169,7 @@ class DataFrame(Frame):
     +---------------------------------------------------------------+
     """
 
-    frame_type = 0x00
+    frame_type = FrameType.DATA
     defined_flags = FrameFlag.create_flag_set('END_STREAM', 'END_SEGMENT',
                                               'PAD_LOW', 'PAD_HIGH')
 
@@ -187,8 +205,7 @@ class HeadersFrame(Frame):
     |                           Padding (*)                       ...
     +---------------------------------------------------------------+
     """
-
-    frame_type = 0x1
+    frame_type = FrameType.HEADERS
     defined_flags = FrameFlag.create_flag_set('END_STREAM', 'END_SEGMENT',
                                               'END_HEADERS', 'PRIORITY',
                                               'PAD_LOW', 'PAD_HIGH')
@@ -213,7 +230,7 @@ class PriorityFrame(Frame):
     |X|                        Priority (31)                        |
     +-+-------------------------------------------------------------+
     """
-    frame_type = 0x02
+    frame_type = FrameType.PRIORITY
     defined_flags = None
 
     def __init__(self, stream_id):
@@ -236,7 +253,7 @@ class RstStreamFrame(Frame):
     |                        Error Code (32)                        |
     +---------------------------------------------------------------+
     """
-    frame_type = 0x03
+    frame_type = FrameType.RST_STREAM
     defined_flags = None
 
     def __init__(self, stream_id):
@@ -262,7 +279,7 @@ class SettingsFrame(Frame):
     +---------------+
 
     """
-    frame_type = 0x04
+    frame_type = FrameType.SETTINGS
     #defined_flags = FrameFlag.create_flag_set('ACK')
 
     HEADER_TABLE_SIZE = 0x01
@@ -279,7 +296,6 @@ class SettingsFrame(Frame):
         super().__init__(stream_id)
 
         self.settings = {}
-
     def deserialize(self, frame_payload):
         pass
 
@@ -297,7 +313,7 @@ class PushPromise(Frame):
     |                 Header Block Fragment (*)                   ...
     +---------------------------------------------------------------+
     """
-    frame_type = 0x5
+    frame_type = FrameType.PUSH_PROMISE
     #defined_flags = FrameFlag.create_flag_set('END_PUSH_PROMISE')
 
     def __init__(self, stream_id):
@@ -320,7 +336,7 @@ class PingFrame(Frame):
     |                                                               |
     +---------------------------------------------------------------+
     """
-    frame_type = 0x6
+    frame_type = FrameType.PING
     #defined_flags = FrameFlag.create_flag_set('ACK')
 
     @classmethod
@@ -355,7 +371,7 @@ class GoAwayFrame(Frame):
     +---------------------------------------------------------------+
     """
 
-    frame_type = 0x7
+    frame_type = FrameType.GO_AWAY
     defined_flags = None
 
     def __init__(self, stream_id=0):
@@ -382,7 +398,7 @@ class WindowUpdateFrame(Frame):
     +-+-------------------------------------------------------------+
     """
 
-    frame_type = 0x8
+    frame_type = FrameType.WINDOW_UPDATE
     defined_flags = None
 
     def __init__(self, stream_id):
@@ -410,7 +426,7 @@ class ContinuationFrame(Frame):
     |                           Padding (*)                       ...
     +---------------------------------------------------------------+
     """
-    frame_type = 0x9
+    frame_type = FrameType.CONTINUATION
     defined_flags = FrameFlag.create_flag_set('PAD_LOW', 'PAD_HIGH',
                                               'END_HEADERS')
 
