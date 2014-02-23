@@ -17,12 +17,13 @@ class TestFrameHeader(unittest.TestCase):
         self.assertEqual(1, header.stream_id)
 
     def test_from_frame(self):
-        frame = Frame(stream_id=20, flags={FrameFlag.END_STREAM}, length=4)
+        frame = Frame(stream_id=20, flags={FrameFlag.END_STREAM, FrameFlag.PAD_LOW}, length=4)
         frame_header = FrameHeader.from_frame(frame)
         self.assertEqual(frame_header.length, 4)
         self.assertEqual(frame_header.frame_type, None)
         self.assertEqual(frame_header.stream_id, 20)
-        self.assertEqual(frame_header.raw_flag_bits, FrameFlag.END_STREAM.value)
+        self.assertEqual(frame_header.raw_flag_bits,
+                         FrameFlag.END_STREAM.value | FrameFlag.PAD_LOW.value)
 
     def test_serialize(self):
         header = FrameHeader(8, 0, 1, 1)
