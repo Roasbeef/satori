@@ -24,6 +24,7 @@ class FrameType(Enum):
 
 
 class ErrorCodes(Enum):
+class ErrorCode(Enum):
     NO_ERROR = 0x0
     PROTOCOL_ERROR = 0x01
     INTERNAL_ERROR = 0x02
