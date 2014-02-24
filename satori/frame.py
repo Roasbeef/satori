@@ -85,6 +85,7 @@ class FrameHeader(object):
         return '<FrameHeader length:{}, frame_type:{}, flags:{}, stream_id:{}>'.format(
             self.length,
             BYTES_TO_FRAME[self.frame_type].__name__,
+            FRAME_TYPE_TO_FRAME[self.frame_type].__name__,
             '<{}>'.format(','.join(str(flag_type.name) for flag_type in FrameFlag if self.flags & flag_type.value)),
             self.stream_id
         )
@@ -113,6 +114,7 @@ class FrameHeader(object):
             '!HBBL',
             self.length & 0x3FFF,  # Knock off first two bits.
             self.frame_type,
+            self.frame_type.value,
             self.raw_flag_bits,
             self.stream_id & 0x7FFFFFFF  # Make sure it's 31 bits.
         )
@@ -140,6 +142,7 @@ class Frame(object):
     @staticmethod
     def from_frame_header(frame_header):
         frame_klass = BYTES_TO_FRAME[frame_header.frame_type]
+        frame_klass = FRAME_TYPE_TO_FRAME[frame_header.frame_type]
 
         parsed_frame = frame_klass(frame_header.stream_id)
         parsed_frame.parse_flags(frame_header.flags)
@@ -453,4 +456,16 @@ BYTES_TO_FRAME = {
     0x7: GoAwayFrame,
     0x8: WindowUpdateFrame,
     0x9: ContinuationFrame
+# Maps members of the FrameType Enum, to its respective class object.
+FRAME_TYPE_TO_FRAME = {
+    FrameType.DATA: DataFrame,
+    FrameType.HEADERS: HeadersFrame,
+    FrameType.PRIORITY: PriorityFrame,
+    FrameType.RST_STREAM: RstStreamFrame,
+    FrameType.SETTINGS: SettingsFrame,
+    FrameType.PUSH_PROMISE: PushPromise,
+    FrameType.PING: PingFrame,
+    FrameType.GO_AWAY: GoAwayFrame,
+    FrameType.WINDOW_UPDATE: WindowUpdateFrame,
+    FrameType.CONTINUATION: ContinuationFrame
 }
