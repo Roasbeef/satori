@@ -40,6 +40,13 @@ class ErrorCode(Enum):
     INADEQUATE_SECURITY = 0x800
 
 
+# TODO(roasbeef): Think of better name? And/or better way to handle the
+# redundancy.
+class SpecialFrameFlag(Enum):
+    ACK = 0x0
+    END_PUSH_PROMISE = 0x4
+
+
 class FrameFlag(Enum):
     # TODO(roasbeef) need to change this first one, only a settings frame uses
     # this.
@@ -124,6 +131,7 @@ class Frame(object):
 
     frame_type = None
     defined_flags = None
+    defined_flags = set()
 
     def __init__(self, stream_id, flags=None, length=0):
         # Stream_id can never be 0x0, throw error if so.
@@ -134,6 +142,7 @@ class Frame(object):
         self.length = length
 
     def __len__(self):
+        # TODO(roasbeef): Delete this method?
         return self.length
 
     def __repr__(self):
@@ -146,6 +155,7 @@ class Frame(object):
 
         parsed_frame = frame_klass(frame_header.stream_id)
         parsed_frame.parse_flags(frame_header.flags)
+        parsed_frame.parse_flags(frame_header.raw_flag_bits)
         return parsed_frame
 
     def parse_flags(self, flag_byte):
@@ -285,6 +295,7 @@ class SettingsFrame(Frame):
     """
     frame_type = FrameType.SETTINGS
     #defined_flags = FrameFlag.create_flag_set('ACK')
+    defined_flags = SpecialFrameFlag.ACK
 
     HEADER_TABLE_SIZE = 0x01
     ENABLE_PUSH = 0x02
@@ -377,6 +388,7 @@ class GoAwayFrame(Frame):
 
     frame_type = FrameType.GO_AWAY
     defined_flags = None
+    defined_flags = set()
 
     def __init__(self, stream_id=0):
         # Again, must have a stream_id of zero.
@@ -404,6 +416,7 @@ class WindowUpdateFrame(Frame):
 
     frame_type = FrameType.WINDOW_UPDATE
     defined_flags = None
+    defined_flags = set()
 
     def __init__(self, stream_id):
         # If ID is zero, applies to entire stream.
