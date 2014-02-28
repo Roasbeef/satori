@@ -1,6 +1,7 @@
 """
 """
 from enum import Enum
+from .exceptions import ProtocolError, FrameSizeError, FlowControlError
 
 import struct
 import asyncio
@@ -8,6 +9,7 @@ import collections
 import io
 
 MAX_FRAME_SIZE = (2 ** 14) - 1
+MAX_WINDOW_UPDATE = (2 ** 31) - 1
 
 
 class FrameType(Enum):
@@ -23,7 +25,6 @@ class FrameType(Enum):
     CONTINUATION = 0x9
 
 
-class ErrorCodes(Enum):
 class ErrorCode(Enum):
     NO_ERROR = 0x0
     PROTOCOL_ERROR = 0x01
@@ -40,19 +41,21 @@ class ErrorCode(Enum):
     INADEQUATE_SECURITY = 0x800
 
 
+class ConnectionSetting(Enum):
+    HEADER_TABLE_SIZE = 0x01
+    ENABLE_PUSH = 0x02
+    MAX_CONCURRENT_STREAMS = 0x03
+    INITIAL_WINDOW_SIZE = 0x04
+
+
 # TODO(roasbeef): Think of better name? And/or better way to handle the
 # redundancy.
 class SpecialFrameFlag(Enum):
-    ACK = 0x0
+    ACK = 0x1
     END_PUSH_PROMISE = 0x4
 
 
 class FrameFlag(Enum):
-    # TODO(roasbeef) need to change this first one, only a settings frame uses
-    # this.
-    # ACK = 0x0
-    # TODO(roasbeef) move this into the PushPromise class
-    # END_PUSH_PROMISE = 0x4
 
     END_STREAM = 0x1
     END_SEGMENT = 0x2
@@ -91,7 +94,6 @@ class FrameHeader(object):
     def __repr__(self):
         return '<FrameHeader length:{}, frame_type:{}, flags:{}, stream_id:{}>'.format(
             self.length,
-            BYTES_TO_FRAME[self.frame_type].__name__,
             FRAME_TYPE_TO_FRAME[self.frame_type].__name__,
             '<{}>'.format(','.join(str(flag_type.name) for flag_type in FrameFlag if self.flags & flag_type.value)),
             self.stream_id
@@ -120,7 +122,6 @@ class FrameHeader(object):
         return struct.pack(
             '!HBBL',
             self.length & 0x3FFF,  # Knock off first two bits.
-            self.frame_type,
             self.frame_type.value,
             self.raw_flag_bits,
             self.stream_id & 0x7FFFFFFF  # Make sure it's 31 bits.
@@ -130,13 +131,9 @@ class FrameHeader(object):
 class Frame(object):
 
     frame_type = None
-    defined_flags = None
     defined_flags = set()
 
     def __init__(self, stream_id, flags=None, length=0):
-        # Stream_id can never be 0x0, throw error if so.
-        # Only the initial response, to an HTTP/1.1 update
-        # request can have an identifier of 0x1? or 0x0?
         self.stream_id = stream_id
         self.flags = flags if flags is not None else set()
         self.length = length
@@ -145,16 +142,11 @@ class Frame(object):
         # TODO(roasbeef): Delete this method?
         return self.length
 
-    def __repr__(self):
-        pass
-
     @staticmethod
     def from_frame_header(frame_header):
-        frame_klass = BYTES_TO_FRAME[frame_header.frame_type]
         frame_klass = FRAME_TYPE_TO_FRAME[frame_header.frame_type]
 
         parsed_frame = frame_klass(frame_header.stream_id)
-        parsed_frame.parse_flags(frame_header.flags)
         parsed_frame.parse_flags(frame_header.raw_flag_bits)
         return parsed_frame
 
@@ -187,25 +179,44 @@ class DataFrame(Frame):
     defined_flags = FrameFlag.create_flag_set('END_STREAM', 'END_SEGMENT',
                                               'PAD_LOW', 'PAD_HIGH')
 
-    def __init__(self, stream_id):
-        super().__init__(stream_id)
+    def __init__(self, stream_id, **kwargs):
+        if stream_id == 0:
+            raise ProtocolError()
+
+        super().__init__(stream_id, **kwargs)
 
         self.data = b''
         self.pad_high = None
         self.pad_low = None
-        self.padding = None
+        self.total_padding = 0
 
     def __len__(self):
-        return len(self.data)
+        return 2 + len(self.data) + self.total_padding
+
+    def __repr__(self):
+        pass
 
     def deserialize(self, frame_payload):
-        pass
+        self.pad_high = frame_payload[0] if FrameFlag.PAD_HIGH in self.flags else 0
+        self.pad_low = frame_payload[1] if FrameFlag.PAD_LOW in self.flags else 0
 
-    def serialize(self):
-        pass
+        self.total_padding = (self.pad_high * 256) + self.pad_low
+        if self.total_padding > len(frame_payload[2:]):
+            raise ProtocolError()
+
+        # TODO(roasbeef): Enforce max frame size, tests and such.
+        self.data = frame_payload[2:len(frame_payload) - self.total_padding]
+
+    def serialize(self, pad_low=0, pad_high=0):
+        frame_header = FrameHeader.from_frame(self).serialize()
+
+        padding_bytes = ((pad_high * 256) + pad_low) * struct.pack('!x')
+        pad_low_and_high = struct.pack('!BB', pad_high, pad_low)
+
+        return frame_header + pad_low_and_high + self.data + padding_bytes
 
 
-class HeadersFrame(Frame):
+class HeadersFrame(DataFrame):
     """
     0                   1                   2                   3
     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -224,16 +235,31 @@ class HeadersFrame(Frame):
                                               'END_HEADERS', 'PRIORITY',
                                               'PAD_LOW', 'PAD_HIGH')
 
-    def __init__(self, stream_id):
-        super().__init__(stream_id)
+    def __init__(self, stream_id, priority=None, **kwargs):
+        super().__init__(stream_id, **kwargs)
 
         self.priority = None
 
-    def deserialize(self, frame_payload):
-        pass
+    def __len__(self):
+        return 2 + (4 if self.priority is not None else 0) + len(self.data) + self.total_padding
 
-    def serialize(self):
-        pass
+    def deserialize(self, frame_payload):
+        if FrameFlag.PRIORITY in self.flags:
+            # Grab the priority, snip off the reserved bit.
+            self.priority = struct.unpack('!L', frame_payload[2:6])[0] & 0x7FFFFFFF
+            # Slice off the 4 priority bytes, at this point it's like a regular
+            # DataFrame payload.
+            frame_payload = frame_payload[:2] + frame_payload[6:]
+
+        super().deserialize(frame_payload)
+
+    def serialize(self, pad_low=0, pad_high=0):
+        serialized_frame = super().serialize(pad_low, pad_high)
+        if FrameFlag.PRIORITY not in self.flags:
+            return serialized_frame
+        else:
+            priority_bytes = struct.pack('!L', self.priority)
+            return serialized_frame[:10] + (priority_bytes) + serialized_frame[10:]
 
 
 class PriorityFrame(Frame):
@@ -247,16 +273,26 @@ class PriorityFrame(Frame):
     frame_type = FrameType.PRIORITY
     defined_flags = None
 
-    def __init__(self, stream_id):
-        super().__init__(stream_id)
+    def __init__(self, stream_id, **kwargs):
+        if stream_id == 0:
+            raise ProtocolError()
+
+        super().__init__(stream_id, **kwargs)
 
         self.priority = 0
 
+    def __len__(self):
+        return 4
+
     def deserialize(self, frame_payload):
-        pass
+        if len(frame_payload) != 4:
+            raise ProtocolError()
+
+        self.priority = struct.unpack('!L', frame_payload)[0] & 0x7FFFFFFF
 
     def serialize(self):
-        pass
+        frame_header = FrameHeader.from_frame(self).serialize()
+        return frame_header + struct.pack('!L', self.priority & 0x7FFFFFFF)
 
 
 class RstStreamFrame(Frame):
@@ -270,16 +306,27 @@ class RstStreamFrame(Frame):
     frame_type = FrameType.RST_STREAM
     defined_flags = None
 
-    def __init__(self, stream_id):
-        super().__init__(stream_id)
+    def __init__(self, stream_id, error_code=ErrorCode.NO_ERROR, **kwargs):
+        super().__init__(stream_id, **kwargs)
 
-        self.error_code = 0
+        self.error_code = error_code
+
+    def __len__(self):
+        return 4
 
     def deserialize(self, frame_payload):
-        pass
+        if len(frame_payload) != 4:
+            raise ProtocolError()
+
+        try:
+            self.error_code = ErrorCode(struct.unpack('!L', frame_payload)[0])
+        except ValueError:
+            # Not valid code, yatata...
+            raise ProtocolError()
 
     def serialize(self):
-        pass
+        frame_header = FrameHeader.from_frame(self).serialize()
+        return frame_header + struct.pack('!L', self.error_code.value)
 
 
 class SettingsFrame(Frame):
@@ -294,28 +341,52 @@ class SettingsFrame(Frame):
 
     """
     frame_type = FrameType.SETTINGS
-    #defined_flags = FrameFlag.create_flag_set('ACK')
     defined_flags = SpecialFrameFlag.ACK
 
-    HEADER_TABLE_SIZE = 0x01
-    ENABLE_PUSH = 0x02
-    MAX_CONCURRENT_STREAMS = 0x03
-    INITIAL_WINDOW_SIZE = 0x04
+    def __init__(self, stream_id=0, **kwargs):
+        if stream_id != 0:
+            raise ProtocolError()
 
-    FLOW_CONTROL_OPTIONS = None
-
-    def __init__(self, stream_id=0):
-        # Stream ID must ALWAYS be zero
-        # if stream_id != 0:
-        #    raise SomeErrorICreate
-        super().__init__(stream_id)
+        super().__init__(stream_id, **kwargs)
 
         self.settings = {}
+
+    def __len__(self):
+        if SpecialFrameFlag.ACK in self.flags:
+            return 0
+        else:
+            # 5 bytes per setting.
+            return len(self.settings) * 5
+
     def deserialize(self, frame_payload):
-        pass
+        # A settings ACK frame must have no data.
+        if SpecialFrameFlag.ACK in self.flags and len(frame_payload):
+            raise FrameSizeError()
+
+        # Process a frame at a time by splitting up into 5 byte chunks.
+        settings_chunks = (frame_payload[i:i + 5] for i in range(0, len(frame_payload), 5))
+        for setting_chunk in settings_chunks:
+            # TODO(roasbeef): Make sure flow control size value isn't above
+            # 2^31-1
+            setting_key = setting_chunk[0]
+            setting_value = struct.unpack('!L', setting_chunk[1:])[0]
+
+            try:
+                self.settings[ConnectionSetting(setting_key)] = setting_value
+            except ValueError:
+                raise ProtocolError()
 
     def serialize(self):
-        pass
+        # TODO(roasbeef): Use bytearray everywhere or output with b''.joins?
+        settings_header = FrameHeader.from_frame(self).serialize()
+
+        settings = []
+        settings.append(settings_header)
+
+        for setting_key, setting_value in self.settings.items():
+            settings.append(struct.pack('!BL', setting_key.value, setting_value))
+
+        return b''.join(settings)
 
 
 class PushPromise(Frame):
@@ -329,16 +400,33 @@ class PushPromise(Frame):
     +---------------------------------------------------------------+
     """
     frame_type = FrameType.PUSH_PROMISE
-    #defined_flags = FrameFlag.create_flag_set('END_PUSH_PROMISE')
+    # TODO(roasbeef): If this is NOT set, then the next frame on the
+    # promised_stream_id MUST be a ContinuationFrame.
+    defined_flags = SpecialFrameFlag.END_PUSH_PROMISE
 
-    def __init__(self, stream_id):
-        super().__init__(stream_id)
+    def __init__(self, stream_id, **kwargs):
+        # TODO(roasbeef): Stream id must also be assoicated with some other
+        # existing stream.
+        if stream_id == 0:
+            raise ProtocolError()
+
+        super().__init__(stream_id, **kwargs)
+
+        self.promised_stream_id = 0
+        self.data = b''
+
+    def __len__(self):
+        return 4 + len(self.data)
 
     def deserialize(self, frame_payload):
-        pass
+        self.promised_stream_id = struct.unpack('!L', frame_payload[:4])[0] & 0x7FFFFFFF
+        self.data = frame_payload[4:]
 
     def serialize(self):
-        pass
+        frame_header = FrameHeader.from_frame(self).serialize()
+        payload = struct.pack('!L', self.promised_stream_id & 0x7FFFFFFF) + self.data
+
+        return frame_header + payload
 
 
 class PingFrame(Frame):
@@ -352,25 +440,35 @@ class PingFrame(Frame):
     +---------------------------------------------------------------+
     """
     frame_type = FrameType.PING
-    #defined_flags = FrameFlag.create_flag_set('ACK')
+    defined_flags = SpecialFrameFlag.ACK
 
     @classmethod
-    def pong_from_ping(ping_frame):
-        pass
+    def pong_from_ping(cls, ping_frame):
+        pong = cls(ping_frame.stream_id, flags={SpecialFrameFlag.ACK})
+        pong.deserialize(ping_frame.opaque_data)
+        return pong
 
-    def __init__(self, stream_id=0):
+    def __len__(self):
+        return 8
+
+    def __init__(self, stream_id=0, **kwargs):
         # Again stream_id must be zero
-        super().__init__(stream_id)
+        if stream_id != 0:
+            raise ProtocolError()
+
+        super().__init__(stream_id, **kwargs)
 
         self.opaque_data = b''
 
     def deserialize(self, frame_payload):
-        # Length of frame MUST be 8 bytes
-        # Raise FrameSizeError if not.
-        pass
+        if len(frame_payload) != 8:
+            raise FrameSizeError()
+
+        self.opaque_data = frame_payload
 
     def serialize(self):
-        pass
+        frame_header = FrameHeader.from_frame(self).serialize()
+        return frame_header + self.opaque_data
 
 
 class GoAwayFrame(Frame):
@@ -387,22 +485,36 @@ class GoAwayFrame(Frame):
     """
 
     frame_type = FrameType.GO_AWAY
-    defined_flags = None
     defined_flags = set()
 
-    def __init__(self, stream_id=0):
-        # Again, must have a stream_id of zero.
-        super().__init__(stream_id)
+    def __init__(self, stream_id=0, **kwargs):
+        if stream_id != 0:
+            raise ProtocolError()
 
-        self.last_stream_id = 0
-        self.error_code = 0
-        self.debug_data = b''
+        super().__init__(stream_id, **kwargs)
+
+        # TODO(roasbeef): Make something like this consistent with all other
+        # framing data structures.
+        self.last_stream_id = kwargs.get('last_stream_id', 0)
+        self.error_code = kwargs.get('error_code', 0)
+        self.debug_data = kwargs.get('debug_data', b'')
+
+    def __len__(self):
+        return 8 + len(self.debug_data)
 
     def deserialize(self, frame_payload):
-        pass
+        self.last_stream_id = struct.unpack('!L', frame_payload[:4])[0] & 0x7FFFFFFF
+
+        try:
+            self.error_code = ErrorCode(struct.unpack('!L', frame_payload[4:8])[0])
+        except ValueError:
+            raise ProtocolError()
+
+        self.debug_data = frame_payload[8:]
 
     def serialize(self):
-        pass
+        frame_header = FrameHeader.from_frame(self).serialize()
+        return frame_header + struct.pack('!LL', self.last_stream_id & 0x7FFFFFFF, self.error_code.value) + self.debug_data
 
 
 class WindowUpdateFrame(Frame):
@@ -415,23 +527,35 @@ class WindowUpdateFrame(Frame):
     """
 
     frame_type = FrameType.WINDOW_UPDATE
-    defined_flags = None
     defined_flags = set()
 
-    def __init__(self, stream_id):
-        # If ID is zero, applies to entire stream.
-        super().__init__(stream_id)
+    def __init__(self, stream_id, **kwargs):
+        # TODO(roasbeef): Make all __init__ methods uniform.
+        self.connection_update = True if stream_id == 0 else False
+        self.window_size_increment = kwargs.pop('window_size_increment', 0) & 0x7FFFFFFF
 
-        self.window_size_increment = 0
+        # If ID is zero, applies to entire stream.
+        super().__init__(stream_id, **kwargs)
+
+    def __len__(self):
+        return 4
 
     def deserialize(self, frame_payload):
-        pass
+        if len(frame_payload) != 4:
+            raise ProtocolError()
+        else:
+            window_increment = struct.unpack('!L', frame_payload)[0]
+            if window_increment > MAX_WINDOW_UPDATE:
+                raise FlowControlError()
+
+            self.window_size_increment = window_increment
 
     def serialize(self):
-        pass
+        frame_header = FrameHeader.from_frame(self).serialize()
+        return frame_header + struct.pack('!L', self.window_size_increment)
 
 
-class ContinuationFrame(Frame):
+class ContinuationFrame(DataFrame):
     """
     0                   1                   2                   3
     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -447,28 +571,6 @@ class ContinuationFrame(Frame):
     defined_flags = FrameFlag.create_flag_set('PAD_LOW', 'PAD_HIGH',
                                               'END_HEADERS')
 
-    def __int__(self, stream_id):
-        # Can't be zero.
-        super().__init__(stream_id)
-
-    def deserialize(self, frame_payload):
-        pass
-
-    def serialize(self):
-        pass
-
-# Maps frame byte type identifiers to its respective class.
-BYTES_TO_FRAME = {
-    0x0: DataFrame,
-    0x1: HeadersFrame,
-    0x2: PriorityFrame,
-    0x3: RstStreamFrame,
-    0x4: SettingsFrame,
-    0x5: PushPromise,
-    0x6: PingFrame,
-    0x7: GoAwayFrame,
-    0x8: WindowUpdateFrame,
-    0x9: ContinuationFrame
 # Maps members of the FrameType Enum, to its respective class object.
 FRAME_TYPE_TO_FRAME = {
     FrameType.DATA: DataFrame,
