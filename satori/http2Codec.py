@@ -40,7 +40,8 @@ class HeaderEntry(object):
 INDEXED               = 1
 LITERAL_NOT_INDEXED   = 2
 LITERAL_INCREMENTAL   = 3
-LITERAL_SUBSTITUTION  = 4
+""" LITERAL_SUBSTITUTION  = 4 """
+
 
 class HTTP2Codec(object):
   """
