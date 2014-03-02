@@ -196,11 +196,11 @@ class HTTP2Codec(object):
           self.append_decoded_header(HeaderEntry(
             (name, value), referenced=True, emitted=True))
           headers.append((name, value))
-        elif mode == LITERAL_SUBSTITUTION:
+       ''' elif mode == LITERAL_SUBSTITUTION:
           self.insert_decoded_header(HeaderEntry(
               (name, value), referenced=True, emitted=True),
             reference_index)
-          headers.append((name, value))
+          headers.append((name, value))'''
         else:
           headers.append((name, value))
 
