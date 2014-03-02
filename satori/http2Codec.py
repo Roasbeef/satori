@@ -375,7 +375,7 @@ class HTTP2Codec(object):
       # Update table.
       self.append_encoded_header(HeaderEntry(
         header, referenced=True, emitted=True))
-      
+    '''     
     # Literal, substitution indexing.
     elif type == LITERAL_SUBSTITUTION:
       # Encode header.
@@ -384,7 +384,7 @@ class HTTP2Codec(object):
         self.write_literal_string(header[0])
       self.write_integer(0, 0, index)
       self.write_literal_string(header[1])
-      
+    '''     
       # Update table.
       entry = self.encoder_table[index]
       previous = entry.header
