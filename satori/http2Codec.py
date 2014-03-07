@@ -171,16 +171,12 @@ class HTTP2Codec(object):
             
       # Literal
       else:
-        # Find indexing mode.
-        if byte & 0xC0 == 0:
-          mode = LITERAL_SUBSTITUTION
-          name_index = self.read_integer(byte, 6)
-        elif byte & 0xE0 == 0x60:
+        if byte & 0xC0 == 0x40:
           mode = LITERAL_NOT_INDEXED
-          name_index = self.read_integer(byte, 5)
-        elif byte & 0xE0 == 0X40:
+          name_index = self.read_integer(byte, 6)
+        elif byte & 0xC0 == 0X40:
           mode = LITERAL_INCREMENTAL
-          name_index = self.read_integer(byte, 5)
+          name_index = self.read_integer(byte, 6)
 
         # Decode header.
         if name_index == 0:
@@ -193,16 +189,8 @@ class HTTP2Codec(object):
         
         # Update header table and working set.
         if mode == LITERAL_INCREMENTAL:
-          self.append_decoded_header(HeaderEntry(
-            (name, value), referenced=True, emitted=True))
-          headers.append((name, value))
-       ''' elif mode == LITERAL_SUBSTITUTION:
-          self.insert_decoded_header(HeaderEntry(
-              (name, value), referenced=True, emitted=True),
-            reference_index)
-          headers.append((name, value))'''
-        else:
-          headers.append((name, value))
+          self.append_decoded_header(HeaderEntry((name, value), referenced=True, emitted=True))
+        headers.append((name, value))
 
     # Emit remaining headers.
     for entry in self.decoder_table:
@@ -471,70 +459,66 @@ class HTTP2Codec(object):
 #===============================================================================
 # Predefined headers
 #===============================================================================
-DEFAULT_REQUEST_HEADERS = [
-    (":scheme", "http"),
-    (":scheme", "https"),
-    (":host", ""),
-    (":path", "/"),
-    (":method", "get"),
-    ("accept", ""),
-    ("accept-charset", ""),
-    ("accept-encoding", ""),
-    ("accept-language", ""),
-    ("cookie", ""),
-    ("if-modified-since", ""),
-    ("user-agent", ""),
-    ("referer", ""),
-    ("authorization", ""),
-    ("allow", ""),
-    ("cache-control", ""),
-    ("connection", ""),
-    ("content-length", ""),
-    ("content-type", ""),
-    ("date", ""),
-    ("expect", ""),
-    ("from", ""),
-    ("if-match", ""),
-    ("if-none-match", ""),
-    ("if-range", ""),
-    ("if-unmodified-since", ""),
-    ("max-forwards", ""),
-    ("proxy-authorization", ""),
-    ("range", ""),
-    ("via", ""),
-    ]
-
-DEFAULT_RESPONSE_HEADERS = [
-    (":status", "200"),
-    ("age", ""),
-    ("cache-control", ""),
-    ("content-length", ""),
-    ("content-type", ""),
-    ("date", ""),
-    ("etag", ""),
-    ("expires", ""),
-    ("last-modified", ""),
-    ("server", ""),
-    ("set-cookie", ""),
-    ("vary", ""),
-    ("via", ""),
-    ("access-control-allow-origin", ""),
-    ("accept-ranges", ""),
-    ("allow", ""),
-    ("connection", ""),
-    ("content-disposition", ""),
-    ("content-encoding", ""),
-    ("content-language", ""),
-    ("content-location", ""),
-    ("content-range", ""),
-    ("link", ""),
-    ("location", ""),
-    ("proxy-authenticate", ""),
-    ("refresh", ""),
-    ("retry-after", ""),
-    ("strict-transport-security", ""),
-    ("transfer-encoding", ""),
-    ("www-authenticate", ""),
+STATIC_TABLE = [
+    ("authority,""),
+    ("method","GET"),
+    ("method","POST"),
+    ("path","/"),
+    ("path","/index.html"),
+    ("scheme","http"),
+    ("scheme","https"),
+    ("status","200"),
+    ("status","500"),
+    ("status","404"),
+    ("status","403"),
+    ("status","400"),
+    ("status","401"),
+    ("accept-charset",""),
+    ("accept-encoding",""),
+    ("accept-language",""),
+    ("accept-ranges",""),
+    ("accept",""),
+    ("access-control-allow-origin",""),
+    ("age",""),
+    ("allow",""),
+    ("authorization",""),
+    ("cache-control",""),
+    ("content-disposition",""),
+    ("content-encoding",""),
+    ("content-language",""),
+    ("content-length|
+    ("content-location|
+    ("content-range|
+    ("content-type",""),|
+    ("cookie","");
+    ("date",""),
+    ("etag",""),
+    ("expect",""),
+    ("expires",""),
+    ("from",""),
+    ("host",""),
+    ("if-match",""),
+    ("if-modified-since",""),
+    ("if-none-match",""),
+    ("if-range",""),
+    ("if-unmodified-since",""),
+    ("last-modified",""),
+    ("link",""),
+    ("location",""),
+    ("proxy-authenticate",""),
+    ("proxy-authorization",""),
+    ("range",""),
+    ("referer","")
+    ("refresh",""),
+    ("retry-after",""),
+    ("server",""),
+    ("set-cookie",""),
+    ("strict-transport-security",""),
+    ("transfer-encoding",""),
+    ("user-agent",""),
+    ("vary",""),
+    ("via",""),
+    ("www-authenticate",""),
     ]
 
 MAX_VALUES = {
