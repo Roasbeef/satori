@@ -358,6 +358,10 @@ class SettingsFrame(Frame):
             # 5 bytes per setting.
             return len(self.settings) * 5
 
+    @property
+    def is_ack(self):
+        return SpecialFrameFlag.ACK in self.flags
+
     def deserialize(self, frame_payload):
         # A settings ACK frame must have no data.
         if SpecialFrameFlag.ACK in self.flags and len(frame_payload):
