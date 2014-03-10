@@ -26,7 +26,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from struct import pack, unpack
-
+from huffman import *
 class HeaderEntry(object):
   """
   Object representing an entry in the header table.
@@ -40,7 +40,6 @@ class HeaderEntry(object):
 INDEXED               = 1
 LITERAL_NOT_INDEXED   = 2
 LITERAL_INCREMENTAL   = 3
-""" LITERAL_SUBSTITUTION  = 4 """
 
 
 class HTTP2Codec(object):
@@ -48,13 +47,12 @@ class HTTP2Codec(object):
   Codec implementing HTTP2 format.
   """
   def __init__(self,
-    buffer_size=4096,
-    **kwargs):
+    buffer_size=4096):
     """Initialize the codec object."""
     self.max_encoder_size = buffer_size
     self.max_decoder_size = buffer_size
-    
-    self.is_request = kwargs["is_request"]
+    self.huffman_decoder = HuffmanDecoder()
+    self.huffman_encoder = HuffmanEncoder()
     
     self.init_codec()
   
@@ -63,29 +61,18 @@ class HTTP2Codec(object):
     # Encoder side variables.
     self.encoder_table = []
     self.encoder_table_size = 0
-    
+    self.encoder_header_table_size = 0
     # Decoder side variables.
     self.decoder_table = []
     self.decoder_table_size = 0
-    
+    self.decoder_header_table_size = 0    
     # Initialization of the tables.
-    if self.is_request:
-      for entry in DEFAULT_REQUEST_HEADERS:
+    for entry in STATIC_TABLE:
         self.encoder_table.append(HeaderEntry(entry))
         self.encoder_table_size += self.entry_len(entry)
-      
-      for entry in DEFAULT_REQUEST_HEADERS:
         self.decoder_table.append(HeaderEntry(entry))
         self.decoder_table_size += self.entry_len(entry)
-    else:
-      for entry in DEFAULT_RESPONSE_HEADERS:
-        self.encoder_table.append(HeaderEntry(entry))
-        self.encoder_table_size += self.entry_len(entry)
-      
-      for entry in DEFAULT_RESPONSE_HEADERS:
-        self.decoder_table.append(HeaderEntry(entry))
-        self.decoder_table_size += self.entry_len(entry)
-        
+
   def entry_len(self, entry):
     """Compute the length of an entry."""
     name, value = entry
@@ -174,7 +161,7 @@ class HTTP2Codec(object):
         if byte & 0xC0 == 0x40:
           mode = LITERAL_NOT_INDEXED
           name_index = self.read_integer(byte, 6)
-        elif byte & 0xC0 == 0X40:
+        elif byte & 0xC0 == 0X00:
           mode = LITERAL_INCREMENTAL
           name_index = self.read_integer(byte, 6)
 
@@ -183,8 +170,6 @@ class HTTP2Codec(object):
           name = self.read_literal_string()
         else:
           name = self.decoder_table[name_index - 1].header[0]
-        if mode == LITERAL_SUBSTITUTION:
-          reference_index = self.read_integer(0, 0)
         value = self.read_literal_string()
         
         # Update header table and working set.
@@ -201,7 +186,7 @@ class HTTP2Codec(object):
   
   def read_next_byte(self):
     """Read a byte from the encoded stream."""
-    (byte, ) = unpack("!B", self.decoded_stream[self.decoded_stream_index])
+    (byte, ) = unpack("!B", self.decoded_stream[self.decoded_stream_index:self.decoded_stream_index + 1])
     self.decoded_stream_index += 1
     return byte
   
@@ -227,11 +212,29 @@ class HTTP2Codec(object):
   
   def read_literal_string(self):
     """Decode a literal string."""
-    length = self.read_integer(0, 0)
-    value = self.decoded_stream[
-      self.decoded_stream_index:self.decoded_stream_index + length]
-    self.decoded_stream_index += length
-    
+    value = ''
+    byte = self.read_next_byte()
+    length = self.read_integer(byte,7)
+    if byte & 0x80:
+      i = 0
+      self.huffman_decoder.begin_decoding()
+      last_path = None
+      while i < length:
+        if last_path is None or last_path == '':
+          byte = self.read_next_byte()
+          result_set = self.huffman_decoder.traverse_tree(byte,8)
+        else:
+          result_set = self.huffman_decoder.traverse_tree(last_path)
+        if result_set[0] is not None:
+          if result_set[0] != '':
+            i = i + 1
+            print(result_set[0])
+            value = value + result_set[0]
+            self.huffman_decoder.begin_decoding()
+        last_path = result_set[1]
+    else: 
+      value = self.decoded_stream[self.decoded_stream_index:self.decoded_stream_index + length]
+      self.decoded_stream_index += length   
     return value
   
   ############################################################
@@ -349,40 +352,20 @@ class HTTP2Codec(object):
       # Encode header.
       self.write_integer(0x60, 5, name_index+1)
       if name_index == -1:
-        self.write_literal_string(header[0])
-      self.write_literal_string(header[1])
+        self.write_literal_string(header[0],True)
+      self.write_literal_string(header[1],True)
       
     # Literal, incremental indexing.
     elif type == LITERAL_INCREMENTAL:
       # Encode header.
       self.write_integer(0x40, 5, name_index+1)
       if name_index == -1:
-        self.write_literal_string(header[0])
-      self.write_literal_string(header[1])
+        self.write_literal_string(header[0], True)
+      self.write_literal_string(header[1], True)
       
       # Update table.
       self.append_encoded_header(HeaderEntry(
         header, referenced=True, emitted=True))
-    '''     
-    # Literal, substitution indexing.
-    elif type == LITERAL_SUBSTITUTION:
-      # Encode header.
-      self.write_integer(0x00, 6, name_index+1)
-      if name_index == -1:
-        self.write_literal_string(header[0])
-      self.write_integer(0, 0, index)
-      self.write_literal_string(header[1])
-    '''     
-      # Update table.
-      entry = self.encoder_table[index]
-      previous = entry.header
-      entry.header = header
-      entry.age = 0
-      entry.referenced = True
-      entry.emitted = True
-      self.encoder_table_size += (
-        self.entry_len(header) - self.entry_len(previous))
-      
     else:
       pass
 
@@ -395,7 +378,7 @@ class HTTP2Codec(object):
     self.update_encoder_table()
     
     # Initialize the encoded stream
-    self.encoded_stream = ""
+    self.encoded_stream = bytearray()
     
     # Encode the removed headers
     for index in removed_headers:
@@ -418,9 +401,7 @@ class HTTP2Codec(object):
           self.encode_header(header)
           encoded_headers = True
         else:
-          remaining_headers.append(header)
-      
-    
+          remaining_headers.append(header)   
     # Return frame
     frame = pack("!HBBL", len(self.encoded_stream), 0, 0, 0)
     return frame + self.encoded_stream
@@ -451,16 +432,24 @@ class HTTP2Codec(object):
         self.encoded_stream += pack("!B", byte | (value & 0x7F))
         value = q
   
-  def write_literal_string(self, value):
-    """Encoding a string."""
-    self.write_integer(0, 0, len(value))
-    self.encoded_stream += str(value)
+  def write_literal_string(self, value, huffman = None):
+    if huffman is None or huffman == False:
+      self.write_integer(0x00, 7, len(value))
+      for char in value:
+        self.encoded_stream.append(ord(char))
+    else:
+      self.write_integer(0x80,7,len(value))
+      encoded_data = self.huffman_encoder.encode_string(value)
+      encoded_byte_array = bytearray(encoded_data[0])
+      print(str(len(encoded_byte_array)))
+      self.encoded_stream = self.encoded_stream + encoded_byte_array
+    
     
 #===============================================================================
 # Predefined headers
 #===============================================================================
 STATIC_TABLE = [
-    ("authority,""),
+    ("authority",""),
     ("method","GET"),
     ("method","POST"),
     ("path","/"),
@@ -486,11 +475,11 @@ STATIC_TABLE = [
     ("content-disposition",""),
     ("content-encoding",""),
     ("content-language",""),
-    ("content-length|
-    ("content-location|
-    ("content-range|
-    ("content-type",""),|
-    ("cookie","");
+    ("content-length",""),
+    ("content-location",""),
+    ("content-range",""),
+    ("content-type",""),
+    ("cookie",""),
     ("date",""),
     ("etag",""),
     ("expect",""),
@@ -508,7 +497,7 @@ STATIC_TABLE = [
     ("proxy-authenticate",""),
     ("proxy-authorization",""),
     ("range",""),
-    ("referer","")
+    ("referer",""),
     ("refresh",""),
     ("retry-after",""),
     ("server",""),
@@ -518,7 +507,7 @@ STATIC_TABLE = [
     ("user-agent",""),
     ("vary",""),
     ("via",""),
-    ("www-authenticate",""),
+    ("www-authenticate","")
     ]
 
 MAX_VALUES = {
