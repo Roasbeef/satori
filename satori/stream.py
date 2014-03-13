@@ -48,7 +48,7 @@ class Stream(object):
         else:
             self._response_headers[header_key.lower()] = header_value
 
-    def receive_promised_stream(stream):
+    def receive_promised_stream(self, stream):
         self._promised_streams[stream.stream_id].set_result(stream)
 
     def process_frame(self, frame):

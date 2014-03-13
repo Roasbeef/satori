@@ -1,11 +1,13 @@
 from .frame import (ConnectionSetting, GoAwayFrame, WindowUpdateFrame, SettingsFrame,
-                    FrameFlag, MAX_FRAME_SIZE, ConnectionSetting)
+                    FrameFlag, MAX_FRAME_SIZE, SpecialFrameFlag)
 from .parser import FrameParser
 from .hpack import HeaderDecoder, HeaderEncoder
 from .stream import MAX_STREAM_ID
+from .exceptions import ProtocolError
 
 import asyncio
 import collections
+
 
 def stream_id_generator(is_client):
     # TODO(roasbeef): When we support the HTTP 1.1 UPGRADE, then the sever must
@@ -44,7 +46,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         self._writer_task = None
 
         # Make this a p-queue?
-        self._outgoing_frames = async.Queue()
+        self._outgoing_frames = asyncio.Queue()
 
         self._connection_header_exchanged = asyncio.Future()
         self._connection_closed = asyncio.Future()
@@ -53,7 +55,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         self._out_flow_control_window = 65535
 
         self._outgoing_window_update = asyncio.Event()
-
 
     def get_next_stream_id(self):
         try:
@@ -80,7 +81,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             pass
         if ConnectionSetting.MAX_FRAME_SIZE in settings_frame.settings:
             pass
-
 
     @asyncio.coroutines
     def handle_connection_frame(self, frame):
@@ -111,10 +111,10 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
             # TODO(roasbeef): Need to handle an ACK somehow?
 
-
     @asyncio.coroutine
     def write_frame(self, frame):
         yield from self._outgoing_frames.put(frame)
+        pass
 
     @asyncio.coroutine
     def start_writer_task(self):
@@ -153,7 +153,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             frame_bytes = frame.serialize()
             self.writer.write(frame_bytes)
 
-
     @asyncio.coroutine
     def start_reader_task(self):
         # Pause until the connection header has been exchanged by both sides.
@@ -176,7 +175,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             elif frame.stream_id in self._streams:
                 self._streams[frame.stream_id].process_frame(frame)
             # should be a new headers frame at this point.
-            else if not self.__client:
+            elif not self.__client:
                 # It's either gonna be a PushPromise frame or HeadersFrame
                 # Should my client also support PushPromises?
                 # Otherwise, this path will only be entered if this is being
@@ -191,7 +190,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
     @asyncio.coroutine
     def update_incoming_flow_control(increment, stream_id=0):
         window_update = WindowUpdateFrame(stream_id=stream_id,
-                                          window_size_increment=increment))
+                                          window_size_increment=increment)
 
         # Possibly block until there's room in the queue.
         yield from self.write_frame(window_update)
