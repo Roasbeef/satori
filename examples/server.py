@@ -9,10 +9,13 @@ app = satori.create_server(options=http2_options, port=8080, path='localhost')
 # Handler is, itself a coroutine function.
 @app.async_route('/')
 def index(request, response, context):
-    resp_headers = response.headers
-    resp_headers['status'] = 200
-    resp_headers['content-type] = application/json'
-    yield from resp_headers.end_headers()
+    # Just to document some of the API.
+    if request.json:
+        message = request.json['greetings']
+
+    response.headers['status'] = 200
+    response.headers['content-type'] = 'application/json'
+    yield from response.end_headers()
 
     # Call backs for pushes instead?
     push_headers = {'path': '/img/testing.jpg'}

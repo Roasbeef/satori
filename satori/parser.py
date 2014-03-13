@@ -2,18 +2,29 @@ from .frame import FrameHeader, Frame, FrameType
 import asyncio
 
 
-class FrameParser(object):
-    def __init__(self, reader):
-        self.reader = reader
-        self._incoming_queue = None
+class FrameWriter(object):
+    def __init__(self, writer, conn):
+        self.writer = writer
+        self._outgoing_queue = None
+        self._conn = conn
 
     @asyncio.coroutine
-    def read_frame(self, num_bytes=8):
+    def write_frames(self):
+        pass
+
+class FrameReader(object):
+    def __init__(self, reader, conn):
+        self.reader = reader
+        self._incoming_queue = None
+        self._conn = conn
+
+    @asyncio.coroutine
+    def read_frame(self, header_length=8):
         while True:
             # Need to be wrapped in some try/accept
 
             # Grab the header first.
-            header_bytes = yield from self.reader.read(num_bytes)
+            header_bytes = yield from self.reader.read(header_length)
             frame_header = FrameHeader.from_raw_bytes(header_bytes)
 
             # Read the remainder of the frame payload.
