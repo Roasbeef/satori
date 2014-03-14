@@ -193,8 +193,6 @@ class DataFrame(Frame):
     def __len__(self):
         return 2 + len(self.data) + self.total_padding
 
-    def __repr__(self):
-        pass
 
     def deserialize(self, frame_payload):
         self.pad_high = frame_payload[0] if FrameFlag.PAD_HIGH in self.flags else 0
