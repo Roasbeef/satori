@@ -61,17 +61,9 @@ class HTTP2Codec(object):
     # Encoder side variables.
     self.encoder_table = []
     self.encoder_table_size = 0
-    self.encoder_header_table_size = 0
     # Decoder side variables.
     self.decoder_table = []
-    self.decoder_table_size = 0
-    self.decoder_header_table_size = 0    
-    # Initialization of the tables.
-    for entry in STATIC_TABLE:
-        self.encoder_table.append(HeaderEntry(entry))
-        self.encoder_table_size += self.entry_len(entry)
-        self.decoder_table.append(HeaderEntry(entry))
-        self.decoder_table_size += self.entry_len(entry)
+    self.decoder_table_size = 0   
 
   def entry_len(self, entry):
     """Compute the length of an entry."""
@@ -81,55 +73,39 @@ class HTTP2Codec(object):
   ############################################################
   # Decoder functions
   ############################################################
-  def append_decoded_header(self, entry):
-    """Add a new entry at the end of the decoder header table."""
+  def last_decoder_table_index(self):
+    if self.decoder_table is not None:
+      return len(self.decoder_table) - 1
+    return -1 
+    
+
+
+  def get_decoder_index_space_entry(self,index):
+    """indices between 1 and len(header_table), inclusive refer to entries in the header table"""
+    if 1 <= index <= len(self.decoder_table):
+      return self.decoder_table[index-1]
+    elif len(self.decoder_table) + 1 <= index:
+      return HeaderEntry(STATIC_TABLE[index-len(self.decoder_table)-1],referenced=False, emitted=False)
+    
+  def prepend_decoded_header(self, entry):
+    """Add a new entry to the beginning of the decoder header table."""
     size = self.entry_len(entry.header)
     dropped_number = 0
 
-    while (self.decoder_table_size + size > self.max_decoder_size
-        and self.decoder_table):
-      removed = self.decoder_table.pop(0)
-      self.decoder_table_size -= self.entry_len(removed.header)
-      dropped_number += 1
+    while (self.decoder_table_size + size > self.max_decoder_size and self.last_decoder_table_index() != -1):
+        removed = self.decoder_table.pop(self.last_decoder_table_index())
+        self.decoder_table_size -= self.entry_len(removed.header)
+        dropped_number += 1
 
     if self.decoder_table_size + size <= self.max_decoder_size:
-      self.decoder_table.append(entry)
+      self.decoder_table.insert(0,entry)
       self.decoder_table_size += size
-
+      
     return dropped_number
 
-  def insert_decoded_header(self, entry, index):
-    """Insert a new entry at the given position in the decoder header
-    table."""
-    size = self.entry_len(entry.header)
-    removed_size = self.entry_len(self.decoder_table[index].header)
-    size -= removed_size
-    dropped_number = 0
-
-    while (self.decoder_table_size + size > self.max_decoder_size
-        and self.decoder_table):
-      removed = self.decoder_table.pop(0)
-      index -= 1
-      if index == -1:
-        size += removed_size
-
-      self.decoder_table_size -= self.entry_len(removed.header)
-      dropped_number += 1
-
-    if self.decoder_table_size + size <= self.max_decoder_size:
-      if index >= 0:
-        self.decoder_table[index] = entry
-      else:
-        self.decoder_table.insert(index, entry)
-      self.decoder_table_size += size
-
-    return dropped_number
 
   def decode_headers(self, stream):
-    """Decode a set of headers."""
-    # Strip the frame header.
-    frame_header = stream[0:8]
-    self.decoded_stream = stream[8:]
+    self.decoded_stream = stream
     self.decoded_stream_index = 0
     
     # Initialize variables.
@@ -145,7 +121,7 @@ class HTTP2Codec(object):
       # Indexed header.
       if byte & 0x80:
         index = self.read_integer(byte, 7)
-        entry = self.decoder_table[index]
+        entry = self.get_decoder_index_space_entry(index)
         # Check if this is a deletion.
         if entry.referenced:
           entry.referenced = False
@@ -168,13 +144,14 @@ class HTTP2Codec(object):
         # Decode header.
         if name_index == 0:
           name = self.read_literal_string()
+          print(name)
         else:
-          name = self.decoder_table[name_index - 1].header[0]
+          name = self.get_decoder_index_space_entry(index).header[0]
         value = self.read_literal_string()
         
         # Update header table and working set.
         if mode == LITERAL_INCREMENTAL:
-          self.append_decoded_header(HeaderEntry((name, value), referenced=True, emitted=True))
+          self.prepend_decoded_header(HeaderEntry((name, value), referenced=True, emitted=True))
         headers.append((name, value))
 
     # Emit remaining headers.
@@ -182,7 +159,7 @@ class HTTP2Codec(object):
       if entry.referenced and not entry.emitted:
         headers.append(entry.header)
 
-    return headers
+    return dict(headers)
   
   def read_next_byte(self):
     """Read a byte from the encoded stream."""
@@ -227,8 +204,7 @@ class HTTP2Codec(object):
           result_set = self.huffman_decoder.traverse_tree(last_path)
         if result_set[0] is not None:
           if result_set[0] != '':
-            i = i + 1
-            print(result_set[0])
+            i +=  1
             value = value + result_set[0]
             self.huffman_decoder.begin_decoding()
         last_path = result_set[1]
@@ -240,19 +216,45 @@ class HTTP2Codec(object):
   ############################################################
   # Encoder functions
   ############################################################
+  def last_encoder_table_index(self):
+    if self.encoder_table is not None:
+      return len(self.encoder_table) - 1
+    return -1
+  
+  def end_encoder_table_index(self):
+    if self.encoder_table is not None:
+      return len(self.encoder_table)
+    return 0
+  
+  def get_encoder_index_space_entry(self,index):
+    if 1 <= index <= len(self.encoder_table):
+      return self.encoder_table[index-1]
+    elif len(self.encoder_table) + 1 <= index:
+      return HeaderEntry(STATIC_TABLE[index-1-len(self.encoder_table)])
+
+  def get_encoder_index_space_header(self,index):
+    if 1 <= index <= len(self.encoder_table):
+      return self.encoder_table[index-1].header
+    elif len(self.encoder_table) + 1 <= index:
+      return STATIC_TABLE[index-1-len(self.encoder_table)]
+
+
+  def last_of_encoder_index_space(self):
+    return len(self.encoder_table) + len(STATIC_TABLE)
+  def end_of_encoder_index_space(self):
+    return len(self.encoder_table) + len(STATIC_TABLE) + 1
+
   def find_header(self, header):
-    """Find the index for a header."""
-    for index, entry in enumerate(self.encoder_table):
-      if header == entry.header:
+    for index in range(1,self.end_of_encoder_index_space()):
+      if header == self.get_encoder_index_space_header(index):
         return index
     return -1
   
   def find_header_name(self, header):
-    """Find an index for the name of a header."""
     name, _ = header
-    for index, entry in enumerate(self.encoder_table):
-      if name == entry.header[0]:
-        return index
+    for index in range(1,self.end_of_encoder_index_space()):
+      if name == self.get_encoder_index_space_header(index)[0]:
+        return index 
     return -1
   
   def update_encoder_table(self):
@@ -283,39 +285,37 @@ class HTTP2Codec(object):
     # Mark entries in reference set, keep entries not in reference set.
     for header in headers:
       index = self.find_header(header)
-      if index == -1:
+      if index == -1 or index-1 > self.last_encoder_table_index():
         remaining_headers.append(header)
       else:
-        entry = self.encoder_table[index]
+        entry = self.encoder_table[index-1]
         if entry.referenced:
-          if entry.emitted:
-            remaining_headers.append(header)
-          else:
-            entry.emitted = True
-            referenced_headers.append(header)
+          entry.emitted = True
+          referenced_headers.append(header)
         else:
           remaining_headers.append(header)
     
     # Find entries from reference set not in header set (those not marked).
-    for i, entry in enumerate(self.encoder_table):
+    for index in range(0,self.end_encoder_table_index()):
+      entry = self.encoder_table[index]
       if entry.referenced:
         if not entry.emitted:
-          removed_headers.append(i)
+          removed_headers.append(index+1)
         else:
           entry.emitted = False
     
     return removed_headers, referenced_headers, remaining_headers
   
-  def append_encoded_header(self, entry):
+  def prepend_encoded_header(self, entry):
     size = self.entry_len(entry.header)
-
-    while (self.encoder_table_size + size > self.max_encoder_size
-        and self.encoder_table):
-      removed = self.encoder_table.pop(0)
+    
+    while (self.encoder_table_size + size > self.max_encoder_size and self.encoder_table):
+      removed = self.encoder_table.pop(self.last_encoder_table_index())
       self.encoder_table_size -= self.entry_len(removed.header)
-
+      removed.referenced = False
+      removed.emitted = False
     if self.encoder_table_size + size <= self.max_encoder_size:
-      self.encoder_table.append(entry)
+      self.encoder_table.insert(0,entry)
       self.encoder_table_size += size
 
   def determine_representation(self, header):
@@ -337,40 +337,42 @@ class HTTP2Codec(object):
     type, index = self.determine_representation(header)
     name_index = self.find_header_name(header)
     
-    # In reference set.
+
     # Indexed.
     if type == INDEXED:
-      reference = self.encoder_table[index]
-      if reference.referenced:
+      reference = self.get_encoder_index_space_entry(index)
+      if not reference.referenced:
         self.write_integer(0x80, 7, index)
-      self.write_integer(0x80, 7, index)
       reference.referenced = True
       reference.emitted = True
     
     # Literal, no indexing.
     elif type == LITERAL_NOT_INDEXED:
-      # Encode header.
-      self.write_integer(0x60, 5, name_index+1)
-      if name_index == -1:
+      if name_index >= 1: 
+        self.write_integer(0x40, 6, name_index)
+      elif name_index == -1:
+        self.write_integer(0x40, 6, 0)
         self.write_literal_string(header[0],True)
       self.write_literal_string(header[1],True)
       
     # Literal, incremental indexing.
     elif type == LITERAL_INCREMENTAL:
-      # Encode header.
-      self.write_integer(0x40, 5, name_index+1)
       if name_index == -1:
+        self.write_integer(0x00, 6, 0)
         self.write_literal_string(header[0], True)
-      self.write_literal_string(header[1], True)
+        self.write_literal_string(header[1], True)
+      else:
+        self.write_integer(0x00, 6, name_index)
+        self.write_literal_string(header[1], True)
       
       # Update table.
-      self.append_encoded_header(HeaderEntry(
-        header, referenced=True, emitted=True))
+      self.prepend_encoded_header(HeaderEntry(header, referenced=True, emitted=True))
     else:
       pass
 
-  def encode_headers(self, headers):
+  def encode_headers(self, dict_headers):
     """Encode a set of headers."""
+    headers = dict_headers.items()
     # Compute diff with reference set.
     removed_headers, referenced_headers, remaining_headers = self.compute_diff(headers)
     
@@ -383,7 +385,7 @@ class HTTP2Codec(object):
     # Encode the removed headers
     for index in removed_headers:
       self.write_integer(0x80, 7, index)
-      entry = self.encoder_table[index]
+      entry = self.encoder_table[index-1]
       entry.referenced = False
       entry.emitted = False
     
@@ -402,9 +404,7 @@ class HTTP2Codec(object):
           encoded_headers = True
         else:
           remaining_headers.append(header)   
-    # Return frame
-    frame = pack("!HBBL", len(self.encoded_stream), 0, 0, 0)
-    return frame + self.encoded_stream
+    return self.encoded_stream
   
   def write_integer(self, byte, prefix_size, value):
     """Encoding an integer."""
@@ -441,7 +441,6 @@ class HTTP2Codec(object):
       self.write_integer(0x80,7,len(value))
       encoded_data = self.huffman_encoder.encode_string(value)
       encoded_byte_array = bytearray(encoded_data[0])
-      print(str(len(encoded_byte_array)))
       self.encoded_stream = self.encoded_stream + encoded_byte_array
     
     
@@ -509,7 +508,7 @@ STATIC_TABLE = [
     ("via",""),
     ("www-authenticate","")
     ]
-
+STATIC_TABLE_LEN = len(STATIC_TABLE)
 MAX_VALUES = {
   0 : 0x00,
   1 : 0x01,
