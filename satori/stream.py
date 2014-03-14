@@ -1,4 +1,4 @@
-from .frame import WindowUpdateFrame, HeadersFrame, FrameFlag, DataFrame, PushPromise
+from .frame import WindowUpdateFrame, HeadersFrame, FrameFlag, DataFrame, PushPromise, RstStreamFrame
 from .response import ClientResponse
 import asyncio
 
@@ -37,10 +37,11 @@ class Stream(object):
         # promised from this particular stream sometime in the future
         self._promised_streams = {}
 
-        self._outgoing_flow_control = 65535
-        self._incoming_flow_control = 65535
+        self._outgoing_flow_control_window = 65535
+        self._incoming_flow_control_window = 65535
 
-        # Start task to pop frames of queue, looking for a end
+        self._outgoing_window_update = asyncio.Event()
+
 
     def add_header(self, header_key, header_value, is_request_header):
         if is_request_header:
@@ -53,18 +54,27 @@ class Stream(object):
 
     def process_frame(self, frame):
         if isinstance(frame, WindowUpdateFrame):
-            self._outgoing_flow_control += frame.window_size_increment
+            self._outgoing_flow_control_window += frame.window_size_increment
+            # Notify the task sending data of an update, as it might be waiting
+            # on one.
+            self._outgoing_window_update.set()
+            self._outgoing_window_update.clear()
+        elif isinstance(frame, RstStreamFrame):
+            # Either a client has rejected a push promise
+            # OR we just messed up somehow in regards to the defined stream
+            # semantics.
+            # Call self._close() ?
+            pass
         else:
             self._frame_queue.put(frame)
 
     @asyncio.coroutine
-    def _send_headers(self, end_headers, end_stream, is_request, priority=0):
-        # How to handle outgoing data from stream?
+    def _send_headers(self, end_headers, end_stream, priority=0):
+        """ Method used by response objects on the server side. """
         headers = HeadersFrame(self.stream_id, priority=priority)
 
         # Pending the API from Metehan.
-        header_data = self._request_headers if is_request else self._response_headers
-        headers.data = self._header_encoder.encode(header_data)
+        headers.data = self._header_encoder.encode(self._response_headers)
 
         if end_headers:
             headers.flags.add(FrameFlag.END_STREAM)
@@ -96,10 +106,10 @@ class Stream(object):
         return raw_headers
 
     @asyncio.coroutine
-    def _promise_push(self, headers):
+    def _promise_push(self, push_request_headers):
         promise_frame = PushPromise(self.stream_id)
         promise_frame.promised_stream_id = self._conn.get_next_stream_id()
-        promise_frame.data = self._header_decoder.encode(headers)
+        promise_frame.data = self._header_decoder.encode(push_request_headers)
 
         self._promised_streams[promise_frame.promised_stream_id] = asyncio.Future()
 
@@ -107,6 +117,7 @@ class Stream(object):
 
         return self._promised_streams[promise_frame.promised_stream_id]
 
+    # Call this using a task? In order for the window update wait to work?
     @asyncio.coroutine
     def _send_data(self, data, end_stream):
         # Need to handle padding also?
@@ -117,7 +128,14 @@ class Stream(object):
         if end_stream:
             data_frame.flags.add(FrameFlag.END_STREAM)
 
+        # Do the 'wait till have room to write' dance here.
+        while len(data_frame) > self._outgoing_flow_control_window:
+            yield from self._outgoing_window_update.wait()
+
+        # TODO(roasbeef): Either chop up the frames here, or do it on the
+        # PriorityQueueFrame level.
         yield from self._conn.write_frame(data_frame)
+        self._outgoing_flow_control_window -= len(data_frame)
 
         # Transition stream state
         if end_stream:
@@ -125,8 +143,33 @@ class Stream(object):
                           else StreamState.CLOSED)
 
     @asyncio.coroutine
-    def _read_data(self, num_bytes):
-        pass
+    def _read_data(self, num_bytes=None):
+        frame_data = bytearray()
+
+        # Return nothing if the stream is 'closed'
+        if self.state = StreamState.CLOSED:
+            return b''
+
+        # TODO(roasbeef): Implement chunked reading via num_bytes
+        # TODO(roasbeef): Regulate incoming flow control also.
+        while num_bytes is None:
+            data = yield from self._frame_queue.get()
+            frame_data.extend(data)
+
+            # Last frame of the stream, we're done here.
+            if FrameFlag.END_STREAM in frame.flags:
+                self.state = (
+                        StreamState.HALF_CLOSED_REMOTE if self.state == StreamState.OPEN
+                        else StreamState.CLOSED
+                )
+                break
+
+            # Only send a flow control update if we actually received data.
+            if len(frame):
+                yield from self._conn.update_incoming_flow_control(increment=len(frame),
+                                                                   stream_id=self.stream_id)
+
+        return frame_data
 
 
     # Maybe should also create a BaseClass? But just override a few methods?
@@ -155,12 +198,8 @@ class Stream(object):
 
     @asyncio.coroutine
     def consume_response(self):
-        # send window update frames for the stream_id once frames are popped
-        # off.
         # First read until we have a end headers, then return a response object
         # that can continue to read off the connection.
-
-        # At this point, state should be half closed local...
 
         # Wait till we have all the header block fragments and or continutation
         # frames
@@ -178,17 +217,28 @@ class Stream(object):
         pass
 
     @asyncio.coroutine
-    def open_request(self, end_stream=False):
-        # encode headers
+    def open_request(self, body=None, end_stream=True):
+        encoded_request_headers = self._header_encoder(self._request_headers)
 
-        # create header frame
+        # TODO(roasbeef): Need to handle chunked sending of headers via
+        # CONTINUTATION frames.
+        headers = HeadersFrame(self.stream_id)
+        headers.data = encoded_request_headers
 
-        # add the end headers flag to the header, unless it's over a certain
-        # size, then we need to use some continuation frames.
+        # Since we're not supporting CONTINUATION frames for now, signal the
+        # end of HEADERS on this stream.
+        headers.flags.add(FrameFlag.END_HEADERS)
 
-        # send off the headers frame
+        if end_stream and body is None:
+            headers.flags.add(FrameFlag.END_STREAM)
 
-        # state should be (half_closed_local) if end_stream otherwise shit is
-        # open
+        # Send off the headers frame
+        yield from self._conn.write_frame(headers)
 
-        pass
+        # Possibly send over a POST body.
+        if body is not None:
+            self._send_data(body, end_stream)
+
+
+        # If we're done sending data, then close off the stream locally.
+        self.state = StreamState.HALF_CLOSED_LOCAL if end_stream else StreamState.OPEN

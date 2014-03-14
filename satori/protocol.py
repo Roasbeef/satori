@@ -1,6 +1,7 @@
 from .frame import (ConnectionSetting, GoAwayFrame, WindowUpdateFrame, SettingsFrame,
                     FrameFlag, MAX_FRAME_SIZE, SpecialFrameFlag)
 from .parser import FrameParser
+from .stream import Stream
 from .hpack import HeaderDecoder, HeaderEncoder
 from .stream import MAX_STREAM_ID
 from .exceptions import ProtocolError
@@ -43,7 +44,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         self._frame_parser = FrameParser(self.reader)
 
         self._reader_task = asyncio.async(self.start_reader_task())
-        self._writer_task = None
+        self._writer_task = asyncio.asyncio(self.start_writer_task())
 
         # Make this a p-queue?
         self._outgoing_frames = asyncio.Queue()
@@ -56,7 +57,11 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
         self._outgoing_window_update = asyncio.Event()
 
-    def get_next_stream_id(self):
+        self._encoder = HeaderEncoder()
+        self._decoder = HeaderDecoder()
+
+
+    def _get_next_stream_id(self):
         try:
             next_stream_id = next(self._stream_gen)
             self._last_stream_id = next_stream_id
@@ -66,21 +71,39 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
         return next_stream_id
 
+    def _new_stream(self):
+        new_stream_id = self.get_next_stream_id()
+        stream = Stream(new_stream_id, self, self._encoder, self._decoder)
+
+        stream._outgoing_flow_control_window = self._settings[ConnectionSetting.INITIAL_WINDOW_SIZE]
+
+        self._streams[new_stream_id] = stream
+        return stream
+
     def update_settings(self, settings_frame):
         if ConnectionSetting.HEADER_TABLE_SIZE in settings_frame.settings:
+            # TODO(metehan): Handle this.
             pass
         if ConnectionSetting.INITIAL_WINDOW_SIZE in settings_frame.settings:
             current_size = self._settings[ConnectionSetting.INITIAL_WINDOW_SIZE]
             updated_size = settings_frame.settings[ConnectionSetting.INITIAL_WINDOW_SIZE]
             size_diff = updated_size - current_size
 
-            # Also loop through and update the window sizes of each of the
-            # streams?
+            self._update_flow_control_all_streams(size_update)
+
             self._settings[ConnectionSetting.INITIAL_WINDOW_SIZE] = size_diff
         if ConnectionSetting.ENABLE_PUSH in settings_frame.settings:
             pass
-        if ConnectionSetting.MAX_FRAME_SIZE in settings_frame.settings:
+        if ConnectionSetting.MAX_CONCURRENT_STREAMS in settings_frame.settings:
             pass
+
+    def _update_flow_control_all_streams(size_update):
+        for stream in self._streams.values():
+            stream._out_flow_control_window += size_update
+
+            # Notify any tasks that we've received a window update.
+            stream._outgoing_window_update.set()
+            stream._outgoing_window_update.clear()
 
     @asyncio.coroutines
     def handle_connection_frame(self, frame):
@@ -92,13 +115,14 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             # TODO(roasbeef): Do something with the last stream_id
             # and the error code...
         elif isinstance(frame, WindowUpdateFrame):
+            # Window update frame for the entire connection, let all the
+            # streams know they can send sum mo'.
             self._out_flow_control_window += frame.window_size_increment
 
-            # Trigger some event? or something else in the sync asyncio
-            # Existence of a race condition here?
             self._outgoing_window_update.set()
             self._outgoing_window_update.clear()
 
+            self._update_flow_control_all_streams(frame.window_size_increment)
         elif isinstance(frame, SettingsFrame):
             # If it isn't just a settings ACK, then ya know, do something.
             if not frame.is_ack:
@@ -114,7 +138,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
     @asyncio.coroutine
     def write_frame(self, frame):
         yield from self._outgoing_frames.put(frame)
-        pass
 
     @asyncio.coroutine
     def start_writer_task(self):
@@ -127,7 +150,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         while not self._connection_closed.done():
             # Need to recognize outgoing PushPromises and make a spot for the
             # future stream
-            frame, is_flow_controlled = yield from self._outgoing_frames.get()
+            frame = yield from self._outgoing_frames.get()
             if isinstance(frame, PushPromise):
                 # if we're the client, then send an error?
                 # create a new stream with the promised stream id
@@ -137,18 +160,14 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
             # Abstract a lot of this to a 'writer' class, just as the reader.
             # Also the heapq logic into a 'PriorityFrame' class.
-            if is_flow_controlled:
+            if isinstance(frame, DataFrame):
                 # Wait to be notified that we've received a window update
                 # frame.
-                # Hmmm, we may be waiting for a current frame that's too big,
-                # while some other frames could possibly be sent? In this case,
-                # should be out the current frame back into the queue, and pop
-                # off a new one?
                 while len(frame) > self._out_flow_control_window:
                     yield from self._outgoing_window_update.wait()
 
-                # Reduce our outgoing window.
-                self._out_flow_control_window -= len(frame)
+            # Reduce our outgoing window.
+            self._out_flow_control_window -= len(frame)
 
             frame_bytes = frame.serialize()
             self.writer.write(frame_bytes)
@@ -162,11 +181,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         # frame that was processed or the reason we're closing the connection?
         while not self._connection_closed.done():
             # Parse a single frame from the connection.
-            frame, is_flow_controlled = yield from frame_parser.read_frame()
-
-            if is_flow_controlled:
-                # Let the other side know we're ready to receive more.
-                asyncio.async(self.update_incoming_flow_control(len(frame)))
+            frame = yield from frame_parser.read_frame()
 
             # Figure out what to do with it.
             if frame.stream_id == 0:

@@ -8,7 +8,7 @@ def client_example():
     conn = satori.connect('localhost:8080', options=options)
 
     # Task returns a response object, as soon as we get the headers back.
-    resp = yield from connection.get('/')
+    resp = yield from connection.request('GET', '/')
     print(resp.status_code)
     # Task to send out what was read, can be iterated over.
     print(yield from resp.read_body())

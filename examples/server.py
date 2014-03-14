@@ -18,7 +18,7 @@ def index(request, response, context):
     yield from response.end_headers()
 
     # Call backs for pushes instead?
-    push_headers = {'path': '/img/testing.jpg'}
+    push_headers = {':path': '/img/testing.jpg'}
     push_stream = yield from response.init_push(push_headers)
     push_status = yield from push_stream.write_file(path='/img/testing.jpg', end_stream=True)  # Equiv `write_many` method? and just `write`
         # Need to handle a rejected push.

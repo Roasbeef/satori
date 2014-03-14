@@ -4,8 +4,16 @@ import collections
 
 class HTTP2Server(HTTP2CommonProtocol):
     def __init__(self):
-        self.upcoming_stream_id = 0
+        super().__init__(is_client=False)
 
-    def handshake(self):
+    def connection_made(self, transport):
+        super().connection_made(transport)
+        yield from settings_handshake()
+
+    @asyncio.coroutine
+    def settings_handshake(self):
         pass
 
+
+def create_server():
+    pass
