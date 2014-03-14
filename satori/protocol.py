@@ -107,7 +107,12 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
     @asyncio.coroutines
     def handle_connection_frame(self, frame):
-        if isinstance(frame, GoAwayFrame):
+        if isinstance(frame, PingFrame):
+            pong_frame = frame.pong_from_ping(frame)
+            yield from self.write_frame(pong_frame)
+        elif isinstance(frame, RstStreamFrame):
+            pass
+        elif isinstance(frame, GoAwayFrame):
             # Let the reader and writer coroutines know that the connection is
             # being closed.
             yield from self.close_connection(frame)
@@ -199,7 +204,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
                 # Check if it's a headers frame, create new stream
                 # Also look for a end headers, if so, create a task to process the
                 # frame.
-                # asyncio.async(stream.consume_server_stream())
+                # asyncio.async(stream.consume_request())
                 # add a done call back on the task to close the connection?
 
     @asyncio.coroutine

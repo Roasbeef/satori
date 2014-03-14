@@ -198,9 +198,6 @@ class Stream(object):
 
     @asyncio.coroutine
     def consume_response(self):
-        # First read until we have a end headers, then return a response object
-        # that can continue to read off the connection.
-
         # Wait till we have all the header block fragments and or continutation
         # frames
         raw_headers = yield from self._consume_raw_headers()

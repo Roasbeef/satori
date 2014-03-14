@@ -55,7 +55,7 @@ class ServerResponse(BaseResponse):
         yield from self._stream._send_data(data, end_stream)
 
     @asyncio.coroutine
-    def write_file(self, file_path):
+    def static_write_file(self, file_path):
         pass
 
     @asyncio.coroutine
