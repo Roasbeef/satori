@@ -14,9 +14,6 @@ class StreamState(enum.IntEnum):
      HALF_CLOSED_REMOTE, HALF_CLOSED_LOCAL, CLOSED) = range(7)
 
 
-# Need to handle some server push, pass in a response object to client handler,
-# the handler has a push() method, write_header method (int arg means method
-# response code).
 # NEED TO STRONGLY CONSIDER MAKING THIS INTO TWO SUBCLASSES
 class Stream(object):
 

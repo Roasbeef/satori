@@ -1,4 +1,4 @@
-from .frame import (ConnectionSetting, GoAwayFrame, WindowUpdateFrame, SettingsFrame,
+from .frame import (GoAwayFrame, WindowUpdateFrame, SettingsFrame,
                     FrameFlag, MAX_FRAME_SIZE, SpecialFrameFlag)
 from .parser import FrameParser
 from .stream import Stream
@@ -165,8 +165,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         # need to handle a full outgoing window
         # wait till window opens up
         while not self._connection_closed.done():
-            # Need to recognize outgoing PushPromises and make a spot for the
-            # future stream
             frame = yield from self._outgoing_frames.get()
 
             if isinstance(frame, PushPromise):
@@ -175,8 +173,8 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
                 promised_stream.state = StreamState.RESERVED_LOCAL
                 self._streams[frame.promised_stream_id] = promised_stream
 
-                # Let the stream wish is promising a new stream know that it is
-                # available.
+                # Let the stream which is promising a new stream know that it is
+                # available (via a Future).
                 self._streams[frame.stream_id].receive_promised_stream(promised_stream)
 
             # Abstract a lot of this to a 'writer' class, just as the reader.
@@ -204,13 +202,18 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             # Parse a single frame from the connection.
             frame = yield from frame_parser.read_frame()
 
-            # Figure out what to do with it.
+            # Connection specific frame. Handle it, async style!
             if frame.stream_id == 0:
-                # Make into a task? Or call soon?
                 asyncio.async(self.handle_connection_frame(frame))
+            # Frame for streams we're already aware of.
             elif frame.stream_id in self._streams:
-                self._streams[frame.stream_id].process_frame(frame)
-            # should be a new headers frame at this point.
+                # The other side is promising a push on a new steam id.
+                if isinstance(frame, PushPromise):
+                    asyncio.async(self.process_push_promise(frame))
+                # Otherwise, it's business as usual.
+                else:
+                    self._streams[frame.stream_id].process_frame(frame)
+            # Should be a new headers or pushpromise frame at this point.
             elif not self.__client:
                 # We've received a new request. So create a new stream, and
                 # assign it the received stream id from the frame.
@@ -225,6 +228,21 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
                     response_task.add_done_callback(new_request_stream.close())
 
     @asyncio.coroutine
+    def process_push_promise(self, frame):
+        # Server shouldn't receive a push promise. ConnectionError.
+        if not self.__client:
+            pass
+        # Reject the PushPromise if we're not accepting them. Send a
+        # RstStreamFrame. ProtocolError.
+        if not self._settings[ConnectionSetting.ENABLE_PUSH]:
+            pass
+        # Otherwise, we'll accept the promise on a new stream.
+        else:
+            # Do something with the headers. Trigger callbacks set up by the
+            # client.
+            promised_stream = self._new_stream(stream_id=frame.promised_stream_id)
+            promised_stream.state = StreamState.RESERVED_REMOTE
+
     def update_incoming_flow_control(increment, stream_id=0):
         window_update = WindowUpdateFrame(stream_id=stream_id,
                                           window_size_increment=increment)
