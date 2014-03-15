@@ -4,7 +4,7 @@ import json
 
 # Like load the static resources?
 http2_options = {}
-app = yield from satori.create_server(options=http2_options,
+app = yield from satori.create_server(http2_settings=http2_options,
                                       port=8080)
 
 # Handler is, itself a coroutine function.

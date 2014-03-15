@@ -4,17 +4,13 @@ import json
 
 class BaseResponse(object):
     def __init__(self, headers, stream):
-        self._headers = headers
+        self.headers = headers
         self._stream = stream
 
         self._cookies = {}
 
     def __bool__(self):
         return 200 <= self.status_code <= 300
-
-    @property
-    def headers(self):
-        return self._headers
 
 
 class ClientResponse(BaseResponse):
@@ -47,6 +43,7 @@ class ServerResponse(BaseResponse):
     @asyncio.coroutine
     def end_headers(self, priority=0):
         # Send off the headers frame(s) via this stream.
+        self._stream._response_headers = self.headers
         yield from self._stream.send_headers(end_headers=True, end_stream=False,
                                              priority=priority)
 

@@ -3,8 +3,9 @@ import asyncio
 import collections
 
 class HTTP2ClientConnection(HTTP2CommonProtocol):
-    def __init__(self):
+    def __init__(self, client_settings):
         super().__init__(is_client=True)
+        self._client_settings = client_settings
 
     @asyncio.coroutine
     def request(self, method, resource, body=None, headers={}):
@@ -48,7 +49,7 @@ class HTTP2ClientConnection(HTTP2CommonProtocol):
 def connect(uri, options={}, *, klass=HTTP2ClientConnection, **kwargs):
     host, post = uri.split(':')
     transport, protocol = asyncio.get_event_loop().create_connection(
-            klass, host, port, **kwargs)
+            lambda: klass(options), host, port, **kwargs)
 
     try:
         yield from protocol.settings_handshake(host)

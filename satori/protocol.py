@@ -61,7 +61,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         self._connection_header_exchanged = asyncio.Future()
         self._connection_closed = asyncio.Future()
 
-        self._in_flow_control_window = 65535
         self._out_flow_control_window = 65535
 
         self._outgoing_window_update = asyncio.Event()
@@ -93,7 +92,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
     def update_settings(self, settings_frame):
         if ConnectionSetting.HEADER_TABLE_SIZE in settings_frame.settings:
             # TODO(metehan): Handle this.
-            pass
+            self._header_codec.change_max_size(settings.settings[ConnectionSetting.HEADER_TABLE_SIZE])
         if ConnectionSetting.INITIAL_WINDOW_SIZE in settings_frame.settings:
             current_size = self._settings[ConnectionSetting.INITIAL_WINDOW_SIZE]
             updated_size = settings_frame.settings[ConnectionSetting.INITIAL_WINDOW_SIZE]
@@ -103,9 +102,9 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
             self._settings[ConnectionSetting.INITIAL_WINDOW_SIZE] = size_diff
         if ConnectionSetting.ENABLE_PUSH in settings_frame.settings:
-            pass
+            self._settings[ConnectionSetting.ENABLE_PUSH] = settings_frame.settings[ConnectionSetting.ENABLE_PUSH]
         if ConnectionSetting.MAX_CONCURRENT_STREAMS in settings_frame.settings:
-            pass
+            self._settings[ConnectionSetting.MAX_CONCURRENT_STREAMS] = settings_frame.settings[ConnectionSetting.MAX_CONCURRENT_STREAMS]
 
     def _update_flow_control_all_streams(size_update):
         for stream in self._streams.values():
