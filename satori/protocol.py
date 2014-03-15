@@ -53,7 +53,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         self._frame_parser = FrameParser(self.reader)
 
         self._reader_task = asyncio.async(self.start_reader_task())
-        self._writer_task = asyncio.asyncio(self.start_writer_task())
+        self._writer_task = asyncio.async(self.start_writer_task())
 
         # Make this a p-queue?
         self._outgoing_frames = asyncio.Queue()
@@ -80,6 +80,8 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         return next_stream_id
 
     def _new_stream(self, stream_id=None):
+        # TODO(roasbeef): Add an assertion that the stream ID should be
+        # positive or negative depending on if client or not?
         new_stream_id = self.get_next_stream_id() if stream_id is None else stream_id
         stream = Stream(new_stream_id, self, self._header_codec)
 
@@ -154,7 +156,9 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
     @asyncio.coroutine
     def start_writer_task(self):
+        # Pause until the connection header has been exchanged by both sides.
         yield from self._connection_header_exchanged
+
         # pop off the heapq
         # break larger frames into smaller chunks
         # put chunks back into the heapq?
@@ -208,16 +212,17 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
                 self._streams[frame.stream_id].process_frame(frame)
             # should be a new headers frame at this point.
             elif not self.__client:
-                # It's either gonna be a PushPromise frame or HeadersFrame
-                # Should my client also support PushPromises?
-                # Otherwise, this path will only be entered if this is being
-                # run on a sever side?
-                pass
-                # Check if it's a headers frame, create new stream
-                # Also look for a end headers, if so, create a task to process the
-                # frame.
-                # asyncio.async(stream.consume_request())
-                # add a done call back on the task to close the connection?
+                # We've received a new request. So create a new stream, and
+                # assign it the received stream id from the frame.
+                if isinstance(frame, HeadersFrame):
+                    new_request_stream = self._new_stream(stream_id=frame.stream_id)
+                    new_request_stream.process_frame(frame)
+                    # Create new task which will wait for all the neccessary
+                    # frames to be sent on this stream, and then process the
+                    # request.
+                    response_task = asyncio.async(new_request_stream.consume_request())
+                    # Close off the stream after the response is sent.
+                    response_task.add_done_callback(new_request_stream.close())
 
     @asyncio.coroutine
     def update_incoming_flow_control(increment, stream_id=0):

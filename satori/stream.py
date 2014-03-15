@@ -20,7 +20,6 @@ class StreamState(enum.IntEnum):
 # NEED TO STRONGLY CONSIDER MAKING THIS INTO TWO SUBCLASSES
 class Stream(object):
 
-    def __init__(self, stream_id, conn, header_codec):
     def __init__(self, stream_id, conn, header_codec, priority=0):
         self.stream_id = stream_id
         # Need to handle cases with push promises.
@@ -69,7 +68,6 @@ class Stream(object):
             # Either a client has rejected a push promise
             # OR we just messed up somehow in regards to the defined stream
             # semantics.
-            # Call self._close() ?
             # Call self.close() ?
             pass
         else:
@@ -208,7 +206,7 @@ class Stream(object):
             # TODO(roasbeef): Need to look at the content-type and handle accodingly
             post_data = yield from self._read_data()
 
-        asyncio.async(self._conn.dispatch_response(self, req_body=post_data))
+        yield from self._conn.dispatch_response(self, req_body=post_data)
 
     @asyncio.coroutine
     def consume_response(self):
