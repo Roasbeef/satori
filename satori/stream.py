@@ -1,5 +1,5 @@
 from .frame import (WindowUpdateFrame, HeadersFrame, FrameFlag, DataFrame,
-                    PushPromise, RstStreamFrame, PriorityFrame)
+                    PushPromise, RstStreamFrame, PriorityFrame, DEFAULT_PRIORITY)
 from .response import ClientResponse
 import asyncio
 
@@ -17,10 +17,10 @@ class StreamState(enum.IntEnum):
 # NEED TO STRONGLY CONSIDER MAKING THIS INTO TWO SUBCLASSES
 class Stream(object):
 
-    def __init__(self, stream_id, conn, header_codec, priority=0):
+    def __init__(self, stream_id, conn, header_codec, priority=DEFAULT_PRIORITY):
         self.stream_id = stream_id
-        # Need to handle cases with push promises.
         self.state = StreamState.IDLE
+        # Priority of a frame, lowest is the highest priority
         self.priority = priority
 
         self._request_headers = {}
@@ -71,7 +71,7 @@ class Stream(object):
             self._frame_queue.put(frame)
 
     @asyncio.coroutine
-    def _send_headers(self, end_headers, end_stream, priority=0):
+    def _send_headers(self, end_headers, end_stream, priority=DEFAULT_PRIORITY):
         """ Method used by response objects on the server side. """
         headers = HeadersFrame(self.stream_id, priority=priority)
 
@@ -161,6 +161,8 @@ class Stream(object):
         while num_bytes is None:
             data = yield from self._frame_queue.get()
             frame_data.extend(data)
+
+            # assert isinstance(frame, DataFrame)
 
             # Last frame of the stream, we're done here.
             if FrameFlag.END_STREAM in frame.flags:

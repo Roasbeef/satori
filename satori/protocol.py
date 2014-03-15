@@ -1,5 +1,5 @@
 from .frame import (GoAwayFrame, WindowUpdateFrame, SettingsFrame,
-                    FrameFlag, MAX_FRAME_SIZE, SpecialFrameFlag)
+                    FrameFlag, MAX_FRAME_SIZE, SpecialFrameFlag, DEFAULT_PRIORITY)
 from .parser import FrameParser
 from .stream import Stream
 from .hpack import HTTP2Codec
@@ -50,7 +50,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         self._streams = {}
         self._settings = {ConnectionSetting.INITIAL_WINDOW_SIZE: 65535}
 
-        self._frame_parser = FrameParser(self.reader)
+        self._frame_parser = FrameParser(self.reader, self)
 
         self._reader_task = asyncio.async(self.start_reader_task())
         self._writer_task = asyncio.async(self.start_writer_task())
@@ -79,11 +79,11 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
         return next_stream_id
 
-    def _new_stream(self, stream_id=None):
+    def _new_stream(self, stream_id=None, priority=DEFAULT_PRIORITY):
         # TODO(roasbeef): Add an assertion that the stream ID should be
         # positive or negative depending on if client or not?
         new_stream_id = self.get_next_stream_id() if stream_id is None else stream_id
-        stream = Stream(new_stream_id, self, self._header_codec)
+        stream = Stream(new_stream_id, self, self._header_codec, priority)
 
         stream._outgoing_flow_control_window = self._settings[ConnectionSetting.INITIAL_WINDOW_SIZE]
 
@@ -152,7 +152,10 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
     @asyncio.coroutine
     def write_frame(self, frame):
-        yield from self._outgoing_frames.put(frame)
+        frame_priority = self._streams[frame.stream_id]
+        next_frame_to_write = self._priority_write_frame.push_pop_frame(frame,
+                                                                        frame_priority)
+        self._outgoing_frames.put(next_frame_to_write)
 
     @asyncio.coroutine
     def start_writer_task(self):
@@ -162,8 +165,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         # pop off the heapq
         # break larger frames into smaller chunks
         # put chunks back into the heapq?
-        # need to handle a full outgoing window
-        # wait till window opens up
         while not self._connection_closed.done():
             frame = yield from self._outgoing_frames.get()
 
@@ -177,19 +178,23 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
                 # available (via a Future).
                 self._streams[frame.stream_id].receive_promised_stream(promised_stream)
 
-            # Abstract a lot of this to a 'writer' class, just as the reader.
-            # Also the heapq logic into a 'PriorityFrame' class.
+            # TODO(roasbeef): Do we need to handle flow control here on the
+            # connection level? Only DataFrames are flow controled, data frames
+            # can't be sent on the connection stream_id. In this implementation
+            # WindowUpdate frames are applied to ALL stream.
             if isinstance(frame, DataFrame):
                 # Wait to be notified that we've received a window update
-                # frame.
+                # frame. Or should we pop it back unto the heap queue and get a
+                # new frame?
                 while len(frame) > self._out_flow_control_window:
                     yield from self._outgoing_window_update.wait()
 
-                # Reduce our outgoing window.
+               # Reduce our outgoing window.
                 self._out_flow_control_window -= len(frame)
 
             frame_bytes = frame.serialize()
             self.writer.write(frame_bytes)
+            yield from self.writer.drain()
 
     @asyncio.coroutine
     def start_reader_task(self):
@@ -200,7 +205,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         # frame that was processed or the reason we're closing the connection?
         while not self._connection_closed.done():
             # Parse a single frame from the connection.
-            frame = yield from frame_parser.read_frame()
+            frame = yield from self._frame_parser.read_frame()
 
             # Connection specific frame. Handle it, async style!
             if frame.stream_id == 0:
@@ -218,7 +223,11 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
                 # We've received a new request. So create a new stream, and
                 # assign it the received stream id from the frame.
                 if isinstance(frame, HeadersFrame):
-                    new_request_stream = self._new_stream(stream_id=frame.stream_id)
+                    if FrameFlag.PRIORITY in frame:
+                        new_request_stream = self._new_stream(stream_id=frame.stream_id,
+                                                              priority=frame.priority)
+                    else:
+                        new_request_stream = self._new_stream(stream_id=frame.stream_id)
                     new_request_stream.process_frame(frame)
                     # Create new task which will wait for all the neccessary
                     # frames to be sent on this stream, and then process the

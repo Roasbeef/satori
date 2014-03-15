@@ -1,36 +1,55 @@
-from .frame import FrameHeader, Frame, FrameType
+from .frame import FrameHeader, Frame
+
 import asyncio
 import itertools
+import heapq
+import collections
+
+FrameEntry = collections.namedtuple('FrameEntry', ['priority', 'count', 'frame'])
 
 
 class PriorityFrameQueue(object):
-    def __init__(self, conn):
-        self._conn = conn
+    REMOVED = '<gone>'
+
+    def __init__(self):
         # List to be 'heapified'.
         self._frame_queue = []
-        self._frame_indexes = {}
+        self._frame_index = {}
         self._entry_counter = itertools.count()
 
-    def get_frame(self):
+    def push_pop_frame(self, frame, priority):
+        """ Push a new frame into the heap, return the new min priority frame."""
+        frame_entry = FrameEntry(priority, next(self._entry_counter), frame)
+        return heapq.heappushpop(frame_entry).frame
+
+    def pop_frame(self):
+        while self._frame_queue:
+            frame_entry = heapq.heappop(self._frame_queue)
+            if frame_entry.frame is not self.REMOVED:
+                del self._frame_index[frame_entry.frame]
+                return frame_entry.frame
+
+    def push_frame(self, frame, priority):
+        frame_entry = FrameEntry(priority, next(self._entry_counter), frame)
+        if frame_entry.frame in self._frame_index:
+            self.delete_frame(frame_entry.frame)
+
+        self._frame_index[frame] = frame_entry
+
+        heapq.heappush(self._frame_queue, frame_entry)
+
+    def delete_frame(self, frame):
+        frame_entry = self._frame_index.pop(frame)
+        frame_entry[-1] = self.REMOVED
+
+    def reprioritize_stream(self, stream_id):
         pass
 
-    def put_frame(self, frame):
-        pass
-
-class FrameWriter(object):
-    def __init__(self, writer, conn):
-        self.writer = writer
-        self._outgoing_queue = None
-        self._conn = conn
-
-    @asyncio.coroutine
-    def write_frames(self):
-        pass
 
 class FrameReader(object):
     def __init__(self, reader, conn):
         self.reader = reader
-        self._incoming_queue = None
+        self._frame_queue = None
         self._conn = conn
 
     @asyncio.coroutine
@@ -47,11 +66,9 @@ class FrameReader(object):
             frame = Frame.from_frame_header(frame_header)
             frame.deserialize(payload_bytes)
 
-            subject_to_flow_control = frame.frame_type == FrameType.DataFrame
+            # Push this new frame unto the heap, get the new highest priority
+            # frame.
+            stream_priority = self._conn._streams[frame.stream_id].priority
+            prioritized_frame = self._frame_queue.push_pop_frame(frame, stream_priority)
 
-            # Push the frame unto the heapq
-            # Pop off the next one, tuple (frame, is_flow_control)
-
-            # Kick out the frame itself, along with boolean telling the outside world if
-            # the frame needs to be flow controlled.
-            return frame, subject_to_flow_control
+            return prioritized_frame

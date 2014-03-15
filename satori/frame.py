@@ -10,6 +10,7 @@ import io
 
 MAX_FRAME_SIZE = (2 ** 14) - 1
 MAX_WINDOW_UPDATE = (2 ** 31) - 1
+DEFAULT_PRIORITY = (2 ** 30)
 
 
 class FrameType(Enum):
@@ -229,7 +230,7 @@ class HeadersFrame(DataFrame):
     def __init__(self, stream_id, priority=None, **kwargs):
         super().__init__(stream_id, **kwargs)
 
-        self.priority = None
+        self.priority = DEFAULT_PRIORITY if priority is None else priority
 
     def __len__(self):
         return 2 + (4 if self.priority is not None else 0) + len(self.data) + self.total_padding
