@@ -1,6 +1,6 @@
 """
 """
-from enum import Enum
+from enum import IntEnum, Enum
 from .exceptions import ProtocolError, FrameSizeError, FlowControlError
 
 import struct
@@ -94,7 +94,7 @@ class FrameHeader(object):
     def __repr__(self):
         return '<FrameHeader length:{}, frame_type:{}, flags:{}, stream_id:{}>'.format(
             self.length,
-            FRAME_TYPE_TO_FRAME[self.frame_type].__name__,
+            FRAME_TYPE_TO_FRAME[self.frame_type.value].__name__,
             '<{}>'.format(','.join(str(flag_type.name) for flag_type in FrameFlag if self.flags & flag_type.value)),
             self.stream_id
         )
@@ -193,8 +193,6 @@ class DataFrame(Frame):
     def __len__(self):
         return 2 + len(self.data) + self.total_padding
 
-    def __repr__(self):
-        pass
 
     def deserialize(self, frame_payload):
         self.pad_high = frame_payload[0] if FrameFlag.PAD_HIGH in self.flags else 0

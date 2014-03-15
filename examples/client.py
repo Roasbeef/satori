@@ -4,11 +4,16 @@ import json
 
 @asyncio.coroutine
 def client_example():
-    options = {}
-    conn = satori.connect('localhost:8080', options=options)
+    http2_settings = {}
+    conn = yield from satori.connect('localhost:8080', settings=http2_settings)
+
+    #def accept_push(stream):
+    #    print(stream.ready())
+    #
+    #conn.on('push', accept_push)
 
     # Task returns a response object, as soon as we get the headers back.
-    resp = yield from connection.get('/')
+    resp = yield from connection.request('GET', '/')
     print(resp.status_code)
     # Task to send out what was read, can be iterated over.
     print(yield from resp.read_body())
