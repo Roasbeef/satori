@@ -144,9 +144,8 @@ class HTTP2Codec(object):
         # Decode header.
         if name_index == 0:
           name = self.read_literal_string()
-          print(name)
         else:
-          name = self.get_decoder_index_space_entry(index).header[0]
+          name = self.get_decoder_index_space_entry(name_index).header[0]
         value = self.read_literal_string()
         
         # Update header table and working set.
@@ -448,19 +447,19 @@ class HTTP2Codec(object):
 # Predefined headers
 #===============================================================================
 STATIC_TABLE = [
-    ("authority",""),
-    ("method","GET"),
-    ("method","POST"),
-    ("path","/"),
-    ("path","/index.html"),
-    ("scheme","http"),
-    ("scheme","https"),
-    ("status","200"),
-    ("status","500"),
-    ("status","404"),
-    ("status","403"),
-    ("status","400"),
-    ("status","401"),
+    (":authority",""),
+    (":method","GET"),
+    (":method","POST"),
+    (":path","/"),
+    (":path","/index.html"),
+    (":scheme","http"),
+    (":scheme","https"),
+    (":status","200"),
+    (":status","500"),
+    (":status","404"),
+    (":status","403"),
+    (":status","400"),
+    (":status","401"),
     ("accept-charset",""),
     ("accept-encoding",""),
     ("accept-language",""),
@@ -493,6 +492,7 @@ STATIC_TABLE = [
     ("last-modified",""),
     ("link",""),
     ("location",""),
+    ("max-forwards",""),
     ("proxy-authenticate",""),
     ("proxy-authorization",""),
     ("range",""),
