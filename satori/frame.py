@@ -41,13 +41,6 @@ class ErrorCode(Enum):
     INADEQUATE_SECURITY = 0x800
 
 
-class ConnectionSetting(Enum):
-    HEADER_TABLE_SIZE = 0x01
-    ENABLE_PUSH = 0x02
-    MAX_CONCURRENT_STREAMS = 0x03
-    INITIAL_WINDOW_SIZE = 0x04
-
-
 # TODO(roasbeef): Think of better name? And/or better way to handle the
 # redundancy.
 class SpecialFrameFlag(Enum):

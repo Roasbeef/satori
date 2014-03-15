@@ -10,6 +10,13 @@ import asyncio
 import collections
 
 
+class ConnectionSetting(Enum):
+    HEADER_TABLE_SIZE = 0x01
+    ENABLE_PUSH = 0x02
+    MAX_CONCURRENT_STREAMS = 0x03
+    INITIAL_WINDOW_SIZE = 0x04
+
+
 def stream_id_generator(is_client):
     # TODO(roasbeef): When we support the HTTP 1.1 UPGRADE, then the sever must
     # start with stream_id=3, because the initial response to that request must
