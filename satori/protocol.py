@@ -8,6 +8,7 @@ from .exceptions import ProtocolError
 
 import asyncio
 import collections
+import itertools
 
 
 class ConnectionSetting(Enum):
@@ -21,15 +22,16 @@ def stream_id_generator(is_client):
     # TODO(roasbeef): When we support the HTTP 1.1 UPGRADE, then the sever must
     # start with stream_id=3, because the initial response to that request must
     # have stream_id of 1.
-    stream_id = 2 if is_client else 3
+    starting_id = 2 if is_client else 3
+    stream_id_gen = itertools.count(start=starting_id,step=2)
     while True:
         # TODO(roasbeef): Also need to make sure that the stream ID's are
         # monotonically increasing.
-        if stream_id > MAX_STREAM_ID:
+        next_id = next(stream_id_gen)
+        if next_id > MAX_STREAM_ID:
             raise ProtocolError
         else:
-            yield stream_id
-            stream_id += 2
+            yield next_id
 
 
 class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
