@@ -243,6 +243,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             promised_stream = self._new_stream(stream_id=frame.promised_stream_id)
             promised_stream.state = StreamState.RESERVED_REMOTE
 
+    @asyncio.coroutine
     def update_incoming_flow_control(increment, stream_id=0):
         window_update = WindowUpdateFrame(stream_id=stream_id,
                                           window_size_increment=increment)
@@ -262,10 +263,12 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
     @asyncio.coroutine
     def close_connection(go_away_frame=None):
-        # self.writer.close()
-        # self.writer.write_eof()
         # some shit with futures for the running tasks.
-        pass
+        # self._connection_closed.set_result(True)
+        # self._reader_task.cancel()
+        # self._writer_task.cancel()
+        self.writer.close()
+        self.writer.write_eof()
 
     # Need a connection made in the server class.
     def stream_open(self, reader, writer):
