@@ -1,4 +1,4 @@
-from .protocol import HTTP2CommonProtocol
+from .protocol import HTTP2CommonProtocol, HANDSHAKE_CODE
 import asyncio
 import collections
 
@@ -28,8 +28,22 @@ class HTTP2ClientConnection(HTTP2CommonProtocol):
 
     @asyncio.coroutine
     def settings_handshake(self, host):
-        self._host = host
-        pass
+        our_settings = SettingsFrame(stream_id=0, settings=self._client_settings)
+        
+        yield from self.writer.write(HANDSHAKE_CODE)
+        yield from self.write.write(our_settings.serialize())
+        
+        header_bytes = yield from self.reader.read(8)
+        frame_header = FrameHeader.from_raw_bytes(header_bytes)
+        
+        payload_bytes = yield from self.reader.read(frame_header.length)
+        frame = Frame.from_frame_header(frame_header)
+
+        frame.deserialize(payload_bytes)
+        self.update_settings(frame)
+        self._connection_header_exhanged.set_result(True)
+        
+
 
 def connect(uri, options={}, *, klass=HTTP2ClientConnection, **kwargs):
     host, post = uri.split(':')

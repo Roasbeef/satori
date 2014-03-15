@@ -69,7 +69,17 @@ class HTTP2Codec(object):
     """Compute the length of an entry."""
     name, value = entry
     return len(name) + len(value) + 32
-  
+  def change_max_size(self,new_size):
+    self.max_encoder_size = buffer_size
+    self.max_decoder_size = buffer_size
+    while (self.decoder_table_size > self.max_decoder_size and self.last_decoder_table_index() != -1):
+        removed = self.decoder_table.pop(self.last_decoder_table_index())
+        self.decoder_table_size -= self.entry_len(removed.header)
+
+    while (self.encoder_table_size > self.max_encoder_size and self.last_encoder_table_index() != -1):
+        removed = self.encoder_table.pop(self.last_encoder_table_index())
+        self.encoder_table_size -= self.entry_len(removed.header)
+        
   ############################################################
   # Decoder functions
   ############################################################
@@ -77,8 +87,6 @@ class HTTP2Codec(object):
     if self.decoder_table is not None:
       return len(self.decoder_table) - 1
     return -1 
-    
-
 
   def get_decoder_index_space_entry(self,index):
     """indices between 1 and len(header_table), inclusive refer to entries in the header table"""

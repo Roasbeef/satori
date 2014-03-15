@@ -270,6 +270,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         # header. Then also send the initla settings frame.
         raise NotImplementedError
 
+
     @asyncio.coroutine
     def close_connection(go_away_frame=None):
         # some shit with futures for the running tasks.
@@ -289,3 +290,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         if not self._connection_closed.done():
             self._connection_closed.set_result(True)
         super().connection_lost(exc)
+
+
+HANDSHAKE_CODE = bytearray.fromhex('505249202a20485454502f322e300d0a0d0a534d0d0a0d0a')
+
