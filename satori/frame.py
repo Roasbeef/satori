@@ -335,13 +335,13 @@ class SettingsFrame(Frame):
     frame_type = FrameType.SETTINGS
     defined_flags = SpecialFrameFlag.ACK
 
-    def __init__(self, stream_id=0, **kwargs):
+    def __init__(self, stream_id=0, settings=None, **kwargs):
         if stream_id != 0:
             raise ProtocolError()
 
+        self.settings = {} if settings is None else settings
         super().__init__(stream_id, **kwargs)
 
-        self.settings = {}
 
     def __len__(self):
         if SpecialFrameFlag.ACK in self.flags:
