@@ -2,7 +2,7 @@ from .frame import (ConnectionSetting, GoAwayFrame, WindowUpdateFrame, SettingsF
                     FrameFlag, MAX_FRAME_SIZE, SpecialFrameFlag)
 from .parser import FrameParser
 from .stream import Stream
-from .hpack import HeaderDecoder, HeaderEncoder
+from .hpack import HTTP2Codec
 from .stream import MAX_STREAM_ID
 from .exceptions import ProtocolError
 
@@ -57,8 +57,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
         self._outgoing_window_update = asyncio.Event()
 
-        self._encoder = HeaderEncoder()
-        self._decoder = HeaderDecoder()
+        self._header_codec = HTTP2Codec()
 
 
     def _get_next_stream_id(self):
@@ -71,9 +70,9 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
         return next_stream_id
 
-    def _new_stream(self):
-        new_stream_id = self.get_next_stream_id()
-        stream = Stream(new_stream_id, self, self._encoder, self._decoder)
+    def _new_stream(self, stream_id=None):
+        new_stream_id = self.get_next_stream_id() if stream_id is None else stream_id
+        stream = Stream(new_stream_id, self, self._header_codec)
 
         stream._outgoing_flow_control_window = self._settings[ConnectionSetting.INITIAL_WINDOW_SIZE]
 
@@ -156,12 +155,16 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             # Need to recognize outgoing PushPromises and make a spot for the
             # future stream
             frame = yield from self._outgoing_frames.get()
+
             if isinstance(frame, PushPromise):
-                # if we're the client, then send an error?
-                # create a new stream with the promised stream id
-                # set the stream's state to RESERVED_LOCAL
-                # set the result on the stream's (_promised_stream)
-                pass
+                # Locally create and reserve the promised frame.
+                promised_stream = self._new_stream(stream_id=frame.promised_stream_id)
+                promised_stream.state = StreamState.RESERVED_LOCAL
+                self._streams[frame.promised_stream_id] = promised_stream
+
+                # Let the stream wish is promising a new stream know that it is
+                # available.
+                self._streams[frame.stream_id].receive_promised_stream(promised_stream)
 
             # Abstract a lot of this to a 'writer' class, just as the reader.
             # Also the heapq logic into a 'PriorityFrame' class.
@@ -171,8 +174,8 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
                 while len(frame) > self._out_flow_control_window:
                     yield from self._outgoing_window_update.wait()
 
-            # Reduce our outgoing window.
-            self._out_flow_control_window -= len(frame)
+                # Reduce our outgoing window.
+                self._out_flow_control_window -= len(frame)
 
             frame_bytes = frame.serialize()
             self.writer.write(frame_bytes)

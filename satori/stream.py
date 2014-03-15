@@ -19,7 +19,7 @@ class StreamState(enum.IntEnum):
 # NEED TO STRONGLY CONSIDER MAKING THIS INTO TWO SUBCLASSES
 class Stream(object):
 
-    def __init__(self, stream_id, conn, encoder, decoder):
+    def __init__(self, stream_id, conn, header_codec):
         self.stream_id = stream_id
         # Need to handle cases with push promises.
         self.state = StreamState.IDLE
@@ -27,8 +27,7 @@ class Stream(object):
         self._request_headers = {}
         self._response_headers = {}
 
-        self._header_encoder = encoder
-        self._header_decoder = decoder
+        self._header_codec = header_codec
 
         self._conn = conn
 
@@ -74,7 +73,7 @@ class Stream(object):
         headers = HeadersFrame(self.stream_id, priority=priority)
 
         # Pending the API from Metehan.
-        headers.data = self._header_encoder.encode(self._response_headers)
+        headers.data = self._header_codec.encode_headers(self._response_headers)
 
         if end_headers:
             headers.flags.add(FrameFlag.END_STREAM)
@@ -109,13 +108,17 @@ class Stream(object):
     def _promise_push(self, push_request_headers):
         promise_frame = PushPromise(self.stream_id)
         promise_frame.promised_stream_id = self._conn.get_next_stream_id()
-        promise_frame.data = self._header_decoder.encode(push_request_headers)
+        promise_frame.data = self._header_codec.encode_headers(push_request_headers)
 
+        # Create a new future to keep track of when the stream is 'ready' for
+        # writing by the callee.
         self._promised_streams[promise_frame.promised_stream_id] = asyncio.Future()
 
         yield from self._conn.write_frame(promise_frame)
 
-        return self._promised_streams[promise_frame.promised_stream_id]
+        # Return the newly created stream.
+        yield from self._promised_streams[promise_frame.promised_stream_id]
+        return self._promised_streams[promise_frame.promised_stream_id].result()
 
     # Call this using a task? In order for the window update wait to work?
     @asyncio.coroutine
@@ -177,7 +180,7 @@ class Stream(object):
     def consume_request(self):
         encoded_headers = yield from self._consume_raw_headers()
         self.state = StreamState.OPEN
-        self._request_headers = self._header_decoder.decode(encoded_headers)
+        self._request_headers = self._header_codec.decode_headers(encoded_headers)
 
         # For now, we'll only deal with POST and GET requests...
         if self._request_headers[':method'] not in ('POST', 'GET'):
@@ -188,6 +191,9 @@ class Stream(object):
             self._response_headers['allow'] = "GET, POST"
             # TODO(roasbeef): Should I do away with the partition of headers?
             self._send_headers(end_headers=True, end_stream=True, is_request=False)
+
+            self.state = StreamState.CLOSED
+            return
 
         # Possibly some request body.
         if self._request_headers[':method'] == 'POST':
@@ -203,11 +209,10 @@ class Stream(object):
         raw_headers = yield from self._consume_raw_headers()
         self.state = StreamState.OPEN
 
-        # Api subject to change
-        response_headers = self._header_decoder.decode(raw_headers)
-        # Return a response object here pass in headers and 'self'
-        # Need to add a read method that the response uses?
-        # if client, we'll return a response here
+        response_headers = self._header_codec.decode_headers(raw_headers)
+
+        # Since we have the headers, we can return a response to the client,
+        # the body of the response might still be on the way.
         return ClientResponse(response_headers, self)
 
     def close(self):
@@ -215,7 +220,7 @@ class Stream(object):
 
     @asyncio.coroutine
     def open_request(self, body=None, end_stream=True):
-        encoded_request_headers = self._header_encoder(self._request_headers)
+        encoded_request_headers = self._header_codec.encode_headers(self._request_headers)
 
         # TODO(roasbeef): Need to handle chunked sending of headers via
         # CONTINUTATION frames.
