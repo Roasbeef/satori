@@ -1,6 +1,21 @@
 from .frame import FrameHeader, Frame, FrameType
 import asyncio
+import itertools
 
+
+class PriorityFrameQueue(object):
+    def __init__(self, conn):
+        self._conn = conn
+        # List to be 'heapified'.
+        self._frame_queue = []
+        self._frame_indexes = {}
+        self._entry_counter = itertools.count()
+
+    def get_frame(self):
+        pass
+
+    def put_frame(self, frame):
+        pass
 
 class FrameWriter(object):
     def __init__(self, writer, conn):

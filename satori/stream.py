@@ -1,4 +1,5 @@
-from .frame import WindowUpdateFrame, HeadersFrame, FrameFlag, DataFrame, PushPromise, RstStreamFrame
+from .frame import (WindowUpdateFrame, HeadersFrame, FrameFlag, DataFrame,
+                    PushPromise, RstStreamFrame, PriorityFrame)
 from .response import ClientResponse
 import asyncio
 
@@ -20,9 +21,11 @@ class StreamState(enum.IntEnum):
 class Stream(object):
 
     def __init__(self, stream_id, conn, header_codec):
+    def __init__(self, stream_id, conn, header_codec, priority=0):
         self.stream_id = stream_id
         # Need to handle cases with push promises.
         self.state = StreamState.IDLE
+        self.priority = priority
 
         self._request_headers = {}
         self._response_headers = {}
@@ -58,11 +61,16 @@ class Stream(object):
             # on one.
             self._outgoing_window_update.set()
             self._outgoing_window_update.clear()
+        # TODO(Roasbeef): Should we also update the priority of frames that
+        # this stream has in the heapq?
+        elif isinstance(frame, PriorityFrame):
+            self.priority = frame.priority
         elif isinstance(frame, RstStreamFrame):
             # Either a client has rejected a push promise
             # OR we just messed up somehow in regards to the defined stream
             # semantics.
             # Call self._close() ?
+            # Call self.close() ?
             pass
         else:
             self._frame_queue.put(frame)
