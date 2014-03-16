@@ -1,10 +1,14 @@
 import asyncio
 import json
 
+import logging
+logger = logging.getLogger('http2')
+logger.setLevel(logging.INFO)
+
 
 class BaseResponse(object):
     def __init__(self, headers, stream):
-        self.headers = headers
+        self._headers = headers
         self._stream = stream
 
         self._cookies = {}
@@ -20,7 +24,9 @@ class ClientResponse(BaseResponse):
 
     @asyncio.coroutine
     def read_body(self):
+        logging.info('Reading stream data')
         self.body = yield from self._stream._read_data()
+        logging.info('Done reading stream data')
         return self.body
 
     @property
@@ -43,12 +49,16 @@ class ServerResponse(BaseResponse):
     @asyncio.coroutine
     def end_headers(self, priority=0):
         # Send off the headers frame(s) via this stream.
+        logging.info('Server sending over response headers')
         self._stream._response_headers = self.headers
         yield from self._stream.send_headers(end_headers=True, end_stream=False,
                                              priority=priority)
 
     @asyncio.coroutine
     def write(self, data, end_stream):
+        logging.info('Server writing data to stream')
+        if end_stream:
+            logging.info('SERVER DONE SENDING DATA')
         yield from self._stream._send_data(data, end_stream)
 
     @asyncio.coroutine
@@ -57,6 +67,7 @@ class ServerResponse(BaseResponse):
 
     @asyncio.coroutine
     def init_push(self, push_request_headers):  # TODO(roasbeef): Also allow push response headers here?
+        logging.info('Server is trying to push a promise')
         # Create a new push promise, sending over the headers.
         # The initial headers need to be as if the server is sending the
         # headers pertaining to an original request for that resource.

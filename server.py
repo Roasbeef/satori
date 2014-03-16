@@ -1,10 +1,16 @@
 import satori
 import asyncio
 import json
+import sys
 
 import logging
 logger = logging.getLogger('http2')
 logger.setLevel(logging.INFO)
+if not logger.handlers:
+    out_hdlr = logging.StreamHandler(sys.stdout)
+    out_hdlr.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    out_hdlr.setLevel(logging.INFO)
+    logger.addHandler(out_hdlr)
 
 
 # Handler is, itself a coroutine function.
@@ -31,7 +37,10 @@ def index(request, response, context):
 
 # Like load the static resources?
 http2_options = {}
-app = satori.serve(index, http2_options, port=8080)
+app = satori.server.serve(index, http2_options, 8080)
 
+logger.info('Server created')
 asyncio.get_event_loop().run_until_complete(app)
+logger.info('Server running?')
 asyncio.get_event_loop().run_forever()
+logger.info('still Server running?')

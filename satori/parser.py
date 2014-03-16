@@ -4,6 +4,10 @@ import asyncio
 import itertools
 import heapq
 import collections
+import logging
+
+logger = logging.getLogger('http2')
+logger.setLevel(logging.INFO)
 
 FrameEntry = collections.namedtuple('FrameEntry', ['priority', 'count', 'frame'])
 
@@ -46,7 +50,7 @@ class PriorityFrameQueue(object):
         pass
 
 
-class FrameReader(object):
+class FrameParser(object):
     def __init__(self, reader, conn):
         self.reader = reader
         self._frame_queue = None
@@ -54,21 +58,35 @@ class FrameReader(object):
 
     @asyncio.coroutine
     def read_frame(self, header_length=8):
-        while True:
-            # Need to be wrapped in some try/accept
+        logging.info('Reading a frame')
+        # Need to be wrapped in some try/accept
 
-            # Grab the header first.
-            header_bytes = yield from self.reader.read(header_length)
-            frame_header = FrameHeader.from_raw_bytes(header_bytes)
+        # Grab the header first.
+        header_bytes = yield from self.reader.read(header_length)
+        frame_header = FrameHeader.from_raw_bytes(header_bytes)
 
-            # Read the remainder of the frame payload.
-            payload_bytes = yield from self.reader.read(frame_header.length)
-            frame = Frame.from_frame_header(frame_header)
-            frame.deserialize(payload_bytes)
+        # Read the remainder of the frame payload.
+        payload_bytes = yield from self.reader.read(frame_header.length)
+        frame = Frame.from_frame_header(frame_header)
+        frame.deserialize(payload_bytes)
 
-            # Push this new frame unto the heap, get the new highest priority
-            # frame.
-            stream_priority = self._conn._streams[frame.stream_id].priority
-            prioritized_frame = self._frame_queue.push_pop_frame(frame, stream_priority)
+        logging.info('READ FRAME FROM SOCKET')
+        logging.info('FrameType: ' % frame.frame_type)
+        logging.info('SteamId: ' % frame.stream_id)
+        logging.info('Length: ' % frame.length)
+        if isinstance(frame, DataFrame) or isinstance(frame, HeadersFrame):
+            logging.info('Data: ' % frame.data)
 
-            return prioritized_frame
+        # Push this new frame unto the heap, get the new highest priority
+        # frame.
+        stream_priority = self._conn._streams[frame.stream_id].priority
+        logging.info('Frame has priority: ' % stream_priority)
+        prioritized_frame = self._frame_queue.push_pop_frame(frame, stream_priority)
+
+        logging.info('Passing up frame:')
+        logging.info('FrameType: ' % prioritized_frame.frame_type)
+        logging.info('SteamId: ' % prioritized_frame.stream_id)
+        logging.info('Length: ' % prioritized_frame.length)
+        if isinstance(promised_stream_id, DataFrame) or isinstance(promised_stream_id, HeadersFrame):
+            logging.info('Data: ' % frame.data)
+        return prioritized_frame
