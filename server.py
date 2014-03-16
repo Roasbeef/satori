@@ -8,7 +8,7 @@ logger = logging.getLogger('http2')
 logger.setLevel(logging.INFO)
 if not logger.handlers:
     out_hdlr = logging.StreamHandler(sys.stdout)
-    out_hdlr.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    out_hdlr.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(lineno)d - %(module)s - %(funcName)s - %(message)s'))
     out_hdlr.setLevel(logging.INFO)
     logger.addHandler(out_hdlr)
 
@@ -20,14 +20,18 @@ def index(request, response, context):
     #if request.json:
     #    message = request.json['greetings']
 
-    response.headers[':status'] = 200
+    # TODO(roasbeef): Handle this internally?
+    response.headers[':status'] = '200'
     response.headers['content-type'] = 'application/json'
     yield from response.end_headers()
 
     # Call backs for pushes instead?
-    #push_headers = {':path': '/img/testing.jpg'}
-    #push_stream = yield from response.init_push(push_headers)
-    #push_status = yield from push_stream.static_file(path='/img/testing.jpg', end_stream=True)  # Equiv `write_many` method? and just `write`
+    push_headers = {':path': '/img/testing.jpg'}
+    print("SERVER TRYING TO PUSH")
+    push_stream = yield from response.init_push(push_headers)
+    print("SENT OVER PUSH HEADER")
+    push_status = yield from push_stream.write(b'would be an image', end_stream=True)  # Equiv `write_many` method? and just `write`
+    print("PUSHING IT ")
         # Need to handle a rejected push.
         #if push_status.exception():
         #    pass

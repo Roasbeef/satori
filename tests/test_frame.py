@@ -21,7 +21,7 @@ class TestFrameHeader(unittest.TestCase):
         header = FrameHeader.from_raw_bytes(self.basic_test_bytes)
 
         self.assertEqual(8, len(header))
-        self.assertEqual(FrameType.DATA.value, header.frame_type)
+        self.assertEqual(FrameType.DATA, header.frame_type)
         self.assertEqual(FrameFlag.END_STREAM.value, header.raw_flag_bits)
         self.assertEqual(1, header.stream_id)
 

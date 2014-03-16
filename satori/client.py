@@ -1,5 +1,5 @@
 from .protocol import HTTP2CommonProtocol, HANDSHAKE_CODE
-from .frame import SettingsFrame, DataFrame, FrameHeader
+from .frame import Frame, SettingsFrame, DataFrame, FrameHeader
 import asyncio
 import collections
 
@@ -36,11 +36,13 @@ class HTTP2ClientConnection(HTTP2CommonProtocol):
         yield from stream.open_request(body=body, end_stream=True)
 
         logger.info('Waiting for the response stream: %s' % stream.stream_id)
-        return (yield from self.stream.consume_response())
+        return (yield from stream.consume_response())
 
 
     @asyncio.coroutine
     def settings_handshake(self, host):
+        self._host = host
+
         logger.info('Creating our settings handshake')
         our_settings = SettingsFrame(stream_id=0, settings=self._client_settings)
 
@@ -61,7 +63,7 @@ class HTTP2ClientConnection(HTTP2CommonProtocol):
         logger.info('Updating our settings')
         self.update_settings(frame)
         logger.info('CLIENT HANDSHAKE DONE')
-        self._connection_header_exhanged.set_result(True)
+        self._connection_header_exchanged.set_result(True)
 
 
 

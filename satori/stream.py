@@ -45,7 +45,7 @@ class Stream(object):
 
 
     def add_header(self, header_key, header_value, is_request_header):
-        logging.info('Adding header to stream: %s' % self.stream)
+        logging.info('Adding header to stream: %s' % self.stream_id)
         if is_request_header:
             self._request_headers[header_key.lower()] = header_value
         else:
@@ -57,11 +57,13 @@ class Stream(object):
 
     def process_frame(self, frame):
         if isinstance(frame, WindowUpdateFrame):
-            logger.info('Got a window update frame for stream: %s' % frame.stream_id)
+            logger.info('GOT A WINDOW UPDATE FRAME FOR STREAM: %s, size increase: %s' % (frame.stream_id, frame.window_size_increment))
+            print('Got a window update frame for stream: %s' % frame.stream_id)
             self._outgoing_flow_control_window += frame.window_size_increment
             # Notify the task sending data of an update, as it might be waiting
             # on one.
             logger.info('Letting task know that it can write stream')
+            print('Letting task know that it can write stream')
             self._outgoing_window_update.set()
             self._outgoing_window_update.clear()
         # TODO(Roasbeef): Should we also update the priority of frames that
@@ -78,12 +80,12 @@ class Stream(object):
         else:
             logger.info('Frame sent to stream')
             logging.info('READ FRAME FROM SOCKET')
-            logging.info('FrameType: ' % frame.frame_type)
-            logging.info('SteamId: ' % frame.stream_id)
-            logging.info('Length: ' % frame.length)
+            logging.info('FrameType: %s' % frame.frame_type)
+            logging.info('SteamId: %s' % frame.stream_id)
+            logging.info('Length: %s' % frame.length)
             if isinstance(frame, DataFrame) or isinstance(frame, HeadersFrame):
-                logging.info('Data: ' % frame.data)
-            self._frame_queue.put(frame)
+                logging.info('Data: %s' % frame.data)
+            self._frame_queue.put_nowait(frame)
 
     @asyncio.coroutine
     def _send_headers(self, end_headers, end_stream, priority=DEFAULT_PRIORITY):
@@ -95,19 +97,22 @@ class Stream(object):
         headers.data = self._header_codec.encode_headers(self._response_headers)
 
         if end_headers:
-            logger.info('Last frame to be sent for stream: %' % self.stream_id)
-            headers.flags.add(FrameFlag.END_STREAM)
-        if end_stream:
-            logger.info('Last header to be sent for stream: %' % self.stream_id)
+            logger.info('Last header to be sent for stream: %s' % self.stream_id)
+            print('Last header to be sent for stream: %s' % self.stream_id)
             headers.flags.add(FrameFlag.END_HEADERS)
+        if end_stream:
+            logger.info('Last frame to be sent for stream: %s' % self.stream_id)
+            print('Last frame to be sent for stream: %s' % self.stream_id)
+            headers.flags.add(FrameFlag.END_STREAM)
 
         logger.info('Sending last frame')
+        print('Sending last frame')
         # Flow control?
         yield from self._conn.write_frame(headers)
 
     @asyncio.coroutine
     def _consume_raw_headers(self):
-        logger.info('Getting all the headers on stream: %s' % self.stream)
+        logger.info('Getting all the headers on stream: %s' % self.stream_id)
         raw_headers = bytearray()
 
         while True:
@@ -116,26 +121,32 @@ class Stream(object):
             # response, OR the server attempting to parse a request, and a
             # possibly subsequent body of that request, in the case of a POST
             # request.
+            logger.info('Blocking to get headers on stream: %s' % self.stream_id)
+            print('Blocking to get headers on stream: %s' % self.stream_id)
             header_frame = yield from self._frame_queue.get()
             logger.info('Stream got header frame: %s ' % self.stream_id)
+            print('Stream got header frame: %s ' % self.stream_id)
             raw_headers.extend(header_frame.data)
 
             if FrameFlag.END_STREAM in header_frame.flags:
                 logger.info('Last frame on stream: %s' % self.stream_id)
+                print('Last frame on stream: %s' % self.stream_id)
                 self.state = StreamState.CLOSED
 
             if FrameFlag.END_HEADERS in header_frame.flags:
                 logger.info('No more headers to be gat, breaking: %s' % self.stream_id)
+                print('No more headers to be gat, breaking: %s' % self.stream_id)
                 break
 
         logger.info('Done getting all raw headers for stream: %s' % self.stream_id)
+        print('Done getting all raw headers for stream: %s' % self.stream_id)
         return raw_headers
 
     @asyncio.coroutine
     def _promise_push(self, push_request_headers):
         logger.info('Trying to create new stream')
         promise_frame = PushPromise(self.stream_id)
-        promise_frame.promised_stream_id = self._conn.get_next_stream_id()
+        promise_frame.promised_stream_id = self._conn._get_next_stream_id()
         promise_frame.data = self._header_codec.encode_headers(push_request_headers)
 
         # Create a new future to keep track of when the stream is 'ready' for
@@ -157,7 +168,7 @@ class Stream(object):
         # client case: post request
         # server case: sending back data for response
         data_frame = DataFrame(self.stream_id)
-        data_frame.data = data
+        data_frame.data = data if type(data) is bytes else data.encode('ascii')
         if end_stream:
             logger.info('DONE SENDING DATA FOR STREAM: %s' % self.stream_id)
             data_frame.flags.add(FrameFlag.END_STREAM)
@@ -192,11 +203,16 @@ class Stream(object):
         # TODO(roasbeef): Regulate incoming flow control also.
         while num_bytes is None:
             logger.info('reading some data on stream: %s' % self.stream_id)
-            data = yield from self._frame_queue.get()
-            frame_data.extend(data)
+            frame = yield from self._frame_queue.get()
+            frame_data.extend(frame.data)
 
             # assert isinstance(frame, DataFrame)
 
+            # Only send a flow control update if we actually received data.
+            if len(frame):
+                print('READ OF A FRAME, SENDING THE FLOW CONTROL UPDATE FOR IT: %s' % self.stream_id)
+                yield from self._conn.update_incoming_flow_control(increment=len(frame),
+                                                                   stream_id=self.stream_id)
             # Last frame of the stream, we're done here.
             if FrameFlag.END_STREAM in frame.flags:
                 self.state = (
@@ -204,13 +220,9 @@ class Stream(object):
                         else StreamState.CLOSED
                 )
                 logger.info('last bit of data sent read on stream: %s' % self.stream_id)
+                print('last bit of data sent read on stream: %s' % self.stream_id)
                 break
 
-            # Only send a flow control update if we actually received data.
-            if len(frame):
-                logger.info('read of a frame, sending the flow control update for it: %s' % self.stream_id)
-                yield from self._conn.update_incoming_flow_control(increment=len(frame),
-                                                                   stream_id=self.stream_id)
 
         logger.info('data read: %s' % frame_data)
         return frame_data
@@ -242,9 +254,11 @@ class Stream(object):
         if self._request_headers[':method'] == 'POST':
             # TODO(roasbeef): Need to look at the content-type and handle accodingly
             post_data = yield from self._read_data()
+        else:
+            post_data = None
 
         logger.info('Dispatching response for stream, %s' % self.stream_id)
-        yield from self._conn.dispatch_response(self, req_body=post_data)
+        yield from self._conn.dispatch_response(request_stream=self, req_body=post_data)
 
     @asyncio.coroutine
     def consume_response(self):

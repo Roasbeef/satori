@@ -18,12 +18,17 @@ def client_example():
 
     # Task returns a response object, as soon as we get the headers back.
     resp = yield from conn.request('GET', '/')
+    print("CLIENT HAS ALL THE DATA")
     print(resp.status_code)
+
     # Task to send out what was read, can be iterated over.
     print((yield from resp.read_body()))
 
-    requests = map(asyncio.async, [conn.request('GET', '/'), conn.request('GET', '/')])
-    for completed_resp in asyncio.as_completed(requests):
+    print('TRYING BATCH REQUEST')
+    requests = [asyncio.Task(conn.request('GET', '/')), asyncio.Task(conn.request('GET', '/'))]
+    for response_future in asyncio.as_completed(requests):
+        print('RESP HAS BEEN COMPLETED')
+        completed_resp = yield from response_future
         print((yield from completed_resp.read_body()))
 
 asyncio.get_event_loop().run_until_complete(client_example())

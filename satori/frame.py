@@ -4,13 +4,17 @@ from enum import IntEnum, Enum
 from .exceptions import ProtocolError, FrameSizeError, FlowControlError
 
 import struct
-import asyncio
-import collections
-import io
 
 MAX_FRAME_SIZE = (2 ** 14) - 1
 MAX_WINDOW_UPDATE = (2 ** 31) - 1
 DEFAULT_PRIORITY = (2 ** 30)
+
+
+class ConnectionSetting(Enum):
+    HEADER_TABLE_SIZE = 0x01
+    ENABLE_PUSH = 0x02
+    MAX_CONCURRENT_STREAMS = 0x03
+    INITIAL_WINDOW_SIZE = 0x04
 
 
 class FrameType(Enum):
@@ -88,7 +92,7 @@ class FrameHeader(object):
     def __repr__(self):
         return '<FrameHeader length:{}, frame_type:{}, flags:{}, stream_id:{}>'.format(
             self.length,
-            FRAME_TYPE_TO_FRAME[self.frame_type.value].__name__,
+            FRAME_TYPE_TO_FRAME[self.frame_type].__name__,
             '<{}>'.format(','.join(str(flag_type.name) for flag_type in FrameFlag if self.flags & flag_type.value)),
             self.stream_id
         )
@@ -102,7 +106,7 @@ class FrameHeader(object):
         raw_flags = header_fields[2]
         stream_id = header_fields[3]
 
-        return cls(payload_length, frame_type, raw_flags, stream_id)
+        return cls(payload_length, FrameType(frame_type), raw_flags, stream_id)
 
     @classmethod
     def from_frame(cls, frame):
@@ -135,6 +139,15 @@ class Frame(object):
     def __len__(self):
         # TODO(roasbeef): Delete this method?
         return self.length
+
+    def __repr__(self):
+        return '<{}| length: {}, flags: {}, stream_id: {}, data: {}>'.format(
+            FRAME_TYPE_TO_FRAME[self.frame_type].__name__,
+            len(self),
+            '<{}>'.format(','.join(str(flag_type.name) for flag_type in self.defined_flags if flag_type in self.flags)),
+            self.stream_id,
+            (self.data if isinstance(self, DataFrame) else b''),
+        )
 
     @staticmethod
     def from_frame_header(frame_header):
@@ -187,7 +200,6 @@ class DataFrame(Frame):
     def __len__(self):
         return 2 + len(self.data) + self.total_padding
 
-
     def deserialize(self, frame_payload):
         self.pad_high = frame_payload[0] if FrameFlag.PAD_HIGH in self.flags else 0
         self.pad_low = frame_payload[1] if FrameFlag.PAD_LOW in self.flags else 0
@@ -230,7 +242,8 @@ class HeadersFrame(DataFrame):
     def __init__(self, stream_id, priority=None, **kwargs):
         super().__init__(stream_id, **kwargs)
 
-        self.priority = DEFAULT_PRIORITY if priority is None else priority
+        #self.priority = DEFAULT_PRIORITY if priority is None else priority
+        self.priority = None
 
     def __len__(self):
         return 2 + (4 if self.priority is not None else 0) + len(self.data) + self.total_padding
@@ -333,7 +346,7 @@ class SettingsFrame(Frame):
 
     """
     frame_type = FrameType.SETTINGS
-    defined_flags = SpecialFrameFlag.ACK
+    defined_flags = {SpecialFrameFlag.ACK}
 
     def __init__(self, stream_id=0, settings=None, **kwargs):
         if stream_id != 0:
@@ -341,7 +354,6 @@ class SettingsFrame(Frame):
 
         self.settings = {} if settings is None else settings
         super().__init__(stream_id, **kwargs)
-
 
     def __len__(self):
         if SpecialFrameFlag.ACK in self.flags:
@@ -398,7 +410,7 @@ class PushPromise(Frame):
     frame_type = FrameType.PUSH_PROMISE
     # TODO(roasbeef): If this is NOT set, then the next frame on the
     # promised_stream_id MUST be a ContinuationFrame.
-    defined_flags = SpecialFrameFlag.END_PUSH_PROMISE
+    defined_flags = {SpecialFrameFlag.END_PUSH_PROMISE}
 
     def __init__(self, stream_id, **kwargs):
         # TODO(roasbeef): Stream id must also be assoicated with some other
@@ -436,7 +448,7 @@ class PingFrame(Frame):
     +---------------------------------------------------------------+
     """
     frame_type = FrameType.PING
-    defined_flags = SpecialFrameFlag.ACK
+    defined_flags = {SpecialFrameFlag.ACK}
 
     @classmethod
     def pong_from_ping(cls, ping_frame):

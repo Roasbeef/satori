@@ -1,3 +1,4 @@
+from .frame import DEFAULT_PRIORITY
 import asyncio
 import json
 
@@ -8,7 +9,7 @@ logger.setLevel(logging.INFO)
 
 class BaseResponse(object):
     def __init__(self, headers, stream):
-        self._headers = headers
+        self.headers = headers
         self._stream = stream
 
         self._cookies = {}
@@ -31,7 +32,7 @@ class ClientResponse(BaseResponse):
 
     @property
     def status_code(self):
-        return int(self._headers[':status'])
+        return int(self.headers[':status'])
 
 
     @property
@@ -47,12 +48,12 @@ class ServerResponse(BaseResponse):
 
     # TODO(roasbeef): Support trailing headers?
     @asyncio.coroutine
-    def end_headers(self, priority=0):
+    def end_headers(self, priority=DEFAULT_PRIORITY):
         # Send off the headers frame(s) via this stream.
         logging.info('Server sending over response headers')
         self._stream._response_headers = self.headers
-        yield from self._stream.send_headers(end_headers=True, end_stream=False,
-                                             priority=priority)
+        yield from self._stream._send_headers(end_headers=True, end_stream=False,
+                                              priority=priority)
 
     @asyncio.coroutine
     def write(self, data, end_stream):
@@ -62,7 +63,7 @@ class ServerResponse(BaseResponse):
         yield from self._stream._send_data(data, end_stream)
 
     @asyncio.coroutine
-    def static_write_file(self, file_path):
+    def write_static_file(self, file_path):
         pass
 
     @asyncio.coroutine
@@ -74,9 +75,9 @@ class ServerResponse(BaseResponse):
         push_request_headers[':method'] = 'GET'
         promised_stream = yield from self._stream._promise_push(push_request_headers)
 
-        promised_stream.add_header(':status', 200, is_request_header=False)
-        yield from promised_stream._send_headers(end_headers=True, end_stream=False, is_request=False)
-        promised_stream.state = StreamState.HALF_CLOSED_LOCAL
+        promised_stream.add_header(':status', '200', is_request_header=False)
+        yield from promised_stream._send_headers(end_headers=True, end_stream=False)
+        #promised_stream.state = StreamState.HALF_CLOSED_LOCAL
 
         # create new response, wrap in stream
         # need to pass in headers here? shouldn't be blank?
