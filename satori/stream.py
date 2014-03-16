@@ -208,11 +208,6 @@ class Stream(object):
 
             # assert isinstance(frame, DataFrame)
 
-            # Only send a flow control update if we actually received data.
-            if len(frame):
-                print('READ OF A FRAME, SENDING THE FLOW CONTROL UPDATE FOR IT: %s' % self.stream_id)
-                yield from self._conn.update_incoming_flow_control(increment=len(frame),
-                                                                   stream_id=self.stream_id)
             # Last frame of the stream, we're done here.
             if FrameFlag.END_STREAM in frame.flags:
                 self.state = (
@@ -222,6 +217,12 @@ class Stream(object):
                 logger.info('last bit of data sent read on stream: %s' % self.stream_id)
                 print('last bit of data sent read on stream: %s' % self.stream_id)
                 break
+
+            # Only send a flow control update if we actually received data.
+            if len(frame):
+                print('READ OF A FRAME, SENDING THE FLOW CONTROL UPDATE FOR IT: %s' % self.stream_id)
+                yield from self._conn.update_incoming_flow_control(increment=len(frame),
+                                                                   stream_id=self.stream_id)
 
 
         logger.info('data read: %s' % frame_data)

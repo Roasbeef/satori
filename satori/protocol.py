@@ -278,11 +278,11 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         print('starting main reader task loop')
         while not self._connection_closed.done():
             # Parse a single frame from the connection.
-            #try:
-            frame = yield from self._frame_parser.read_frame()
+            try:
+                frame = yield from self._frame_parser.read_frame()
             # TODO(roasbeef): Need to properly handle this within FrameParser.
-            #except:
-            #    break
+            except:
+                break
             logging.info('Reader POPPED OFF CONNECTION FRAME')
             print('Reader POPPED OFF CONNECTION FRAME')
             logging.info('FrameType: %s' % frame.frame_type)

@@ -25,7 +25,7 @@ def client_example():
     print((yield from resp.read_body()))
 
     print('TRYING BATCH REQUEST')
-    requests = [asyncio.Task(conn.request('GET', '/')), asyncio.Task(conn.request('GET', '/'))]
+    requests = [asyncio.Task(conn.request('GET', '/')) for _ in range(10)]
     for response_future in asyncio.as_completed(requests):
         print('RESP HAS BEEN COMPLETED')
         completed_resp = yield from response_future
