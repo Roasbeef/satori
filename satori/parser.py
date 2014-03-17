@@ -60,11 +60,9 @@ class FrameParser(object):
     @asyncio.coroutine
     def read_frame(self, header_length=8):
         logging.info('Reading a frame')
-        print('Reading a frame')
         # Need to be wrapped in some try/accept
 
         # Grab the header first.
-        print('Bloacking, waiting to read header')
         header_bytes = yield from self.reader.read(header_length)
         frame_header = FrameHeader.from_raw_bytes(header_bytes)
 
@@ -73,38 +71,15 @@ class FrameParser(object):
         frame = Frame.from_frame_header(frame_header)
         frame.deserialize(payload_bytes)
 
-        logging.info('READ FRAME FROM SOCKET')
-        print('READ FRAME FROM SOCKET')
-        logging.info('FrameType: %s' % frame.frame_type)
-        print('FrameType: %s' % frame.frame_type)
-        logging.info('SteamId: %s' % frame.stream_id)
-        print('SteamId: %s' % frame.stream_id)
-        logging.info('Length: %s' % len(frame))
-        print('Length: %s' % len(frame))
-        if isinstance(frame, DataFrame) or isinstance(frame, HeadersFrame):
-            logging.info('Data: %s' % frame.data)
-            print('Data: %s' % frame.data)
+        logging.info('READ FRAME FROM SOCKET: %s' % frame)
 
-        # Push this new frame unto the heap, get the new highest priority
-        # frame.
         try:
             stream_priority = self._conn._streams[frame.stream_id].priority
         except KeyError:
             stream_priority = DEFAULT_PRIORITY
 
         logging.info('Frame has priority: %s' % stream_priority)
-        print('Frame has priority: %s' % stream_priority)
         prioritized_frame = self._frame_queue.push_pop_frame(frame, stream_priority)
 
-        logging.info('Passing up frame:')
-        print('Passing up frame:')
-        logging.info('FrameType: %s' % prioritized_frame.frame_type)
-        print('FrameType: %s' % prioritized_frame.frame_type)
-        logging.info('SteamId: %s' % prioritized_frame.stream_id)
-        print('SteamId: %s' % prioritized_frame.stream_id)
-        logging.info('Length: %s' % len(prioritized_frame))
-        print('Length: %s' % len(prioritized_frame))
-        if isinstance(prioritized_frame, DataFrame) or isinstance(prioritized_frame, HeadersFrame):
-            logging.info('Data: %s' % frame.data)
-            print('Data: %s' % frame.data)
+        logging.info('Passing up frame: %s' % frame)
         return prioritized_frame

@@ -11,10 +11,8 @@ logger.setLevel(logging.INFO)
 
 class HTTP2ClientConnection(HTTP2CommonProtocol):
     def __init__(self, client_settings):
-        logger.info('In client constructor')
         super().__init__(is_client=True)
         self._client_settings = client_settings
-        logger.info('Leaving client constructor')
 
     @asyncio.coroutine
     def request(self, method, resource, body=None, headers={}):
@@ -74,17 +72,11 @@ def connect(uri, options={}, *, klass=HTTP2ClientConnection, **kwargs):
     transport, protocol = yield from asyncio.get_event_loop().create_connection(
             lambda: klass(options), host, port, **kwargs)
 
-    logger.info('Created protocol')
-
     try:
-        logger.info('Trying the handshake')
         yield from protocol.settings_handshake(host)
-        logger.info('Handshake dunzo')
     except Exception as e: # What to do here?
         logger.info('Exception was thrown while trying the handshake.')
         raise e
         sys.exit(1)
 
-
-    logger.info('Passing main connection to client')
     return protocol

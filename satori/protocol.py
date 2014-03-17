@@ -58,9 +58,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         logging.info('waiting for connectino to be open')
 
 
-        logger.info('CREATING READER TASK')
         self._reader_task = asyncio.async(self.start_reader_task())
-        logger.info('CREATING WRITER TASK')
         self._writer_task = asyncio.async(self.start_writer_task())
 
         # Make this a p-queue?
@@ -75,7 +73,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         self._outgoing_window_update = asyncio.Event()
 
         self._header_codec = HTTP2Codec()
-        logger.info('EXITIGN CONSTRUCTOR')
 
 
     def _get_next_stream_id(self):
@@ -91,7 +88,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
     def _new_stream(self, stream_id=None, priority=DEFAULT_PRIORITY):
         # TODO(roasbeef): Add an assertion that the stream ID should be
         # positive or negative depending on if client or not?
-        logger.info('CREATING STREAM IN CONN passed id: %s' % stream_id)
         new_stream_id = self._get_next_stream_id() if stream_id is None else stream_id
         logger.info('CREATING STREAM IN CONN created id: %s' % new_stream_id)
         stream = Stream(new_stream_id, self, self._header_codec, priority)
@@ -99,14 +95,11 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         stream._outgoing_flow_control_window = self._settings[ConnectionSetting.INITIAL_WINDOW_SIZE]
 
         self._streams[new_stream_id] = stream
-        print('Just added stream', new_stream_id, 'to dict')
         return stream
 
     def update_settings(self, settings_frame):
-        logger.info('UPDATING SETTINGS WITH SETTINGS_FRAME')
-        logger.info('SETTINGS GAT: %s ' % settings_frame.settings)
+        logger.info('SETTINGS: %s' % settings_frame.settings)
         if ConnectionSetting.HEADER_TABLE_SIZE in settings_frame.settings:
-            # TODO(metehan): Handle this.
             self._header_codec.change_max_size(settings.settings[ConnectionSetting.HEADER_TABLE_SIZE])
         if ConnectionSetting.INITIAL_WINDOW_SIZE in settings_frame.settings:
             logger.info('processing initial window size')
@@ -154,7 +147,7 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             logger.info('got connection wide window update')
             self._out_flow_control_window += frame.window_size_increment
 
-            logger.info('notify writer taht we have new connection window update')
+            logger.info('notify writer that we have new connection window update')
             self._outgoing_window_update.set()
             self._outgoing_window_update.clear()
 
@@ -164,67 +157,42 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             # If it isn't just a settings ACK, then ya know, do something.
             if not frame.is_ack:
                 # Do that something.
-                logger.info('Go a settings frame in main reader loop')
                 self.update_settings(frame)
 
                 # Fling over a Settings ACK frame.
                 settings_ack = SettingsFrame(stream_id=0, flags={SpecialFrameFlag.ACK})
                 yield from self.write_frame(settings_ack)
-        logger.info('DONE WITH CONNECTION FRAME')
-
             # TODO(roasbeef): Need to handle an ACK somehow?
 
     @asyncio.coroutine
     def write_frame(self, frame):
-        logger.info('write_frame, called, putting frame into write queue')
-        logging.info('Putting frame in PQ:')
-        logging.info('FrameType: %s' % frame.frame_type)
-        logging.info('SteamId: %s' % frame.stream_id)
-        logging.info('Length: %s' % len(frame))
-        if isinstance(frame, DataFrame) or isinstance(frame, HeadersFrame):
-            logging.info('Data: %s' % frame.data)
+        logger.info('Putting frame into pq: %s' % frame)
         frame_priority = self._streams[frame.stream_id]
         next_frame_to_write = self._priority_write_frame.push_pop_frame(frame,
                                                                         frame_priority)
-        logging.info('putting frame unto queue, stream: %s' % frame.stream_id)
+        logging.info('Putting frame unto queue, stream: %s' % frame.stream_id)
         self._outgoing_frames.put_nowait(next_frame_to_write)
-        print('in write_frame, frame has been put into queue')
-        print('queue size', self._outgoing_frames.qsize())
 
     @asyncio.coroutine
     def start_writer_task(self):
         # Pause until the connection header has been exchanged by both sides.
-        logging.info('Writing task waiting for connection header')
-        print('Writing task waiting for connection header')
+        logging.info('Writing task waiting for connection header.')
         yield from self._connection_header_exchanged
         logging.info('Connection header exchanged.')
-        print('Connection header exchanged.')
 
         # pop off the heapq
         # break larger frames into smaller chunks
         # put chunks back into the heapq?
         logging.info('Starting main loop, in writer.')
-        print('Starting main loop, in writer.')
         while not self._connection_closed.done():
-            print('queue size', self._outgoing_frames.qsize())
             try:
                 frame = yield from self._outgoing_frames.get()
             except:
                 break
-            #logging.info('Writer popped off frame')
-            print('Writer popped off frame')
-            #logging.info('FrameType: %s' % frame.frame_type)
-            print('FrameType: %s' % frame.frame_type)
-            #logging.info('SteamId: %s' % frame.stream_id)
-            print('SteamId: %s' % frame.stream_id)
-            #logging.info('Length: %s' % len(frame.length))
-            print('Length: %s' % len(frame))
-            if isinstance(frame, DataFrame) or isinstance(frame, HeadersFrame):
-                #logging.info('Data: %s' % frame.data)
-                print('Data: %s' % frame.data)
+            logging.info('Writer popped frame off queue: %s' % frame)
 
             if isinstance(frame, PushPromise):
-                logging.info('Got a push promised')
+                logging.info('Got a push promise.')
                 # Locally create and reserve the promised frame.
                 promised_stream = self._new_stream(stream_id=frame.promised_stream_id)
                 promised_stream.state = StreamState.RESERVED_LOCAL
@@ -242,24 +210,19 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
                 # Wait to be notified that we've received a window update
                 # frame. Or should we pop it back unto the heap queue and get a
                 # new frame?
-                logging.info('sending a data frame')
-                print('sending a data frame')
+                logging.info('Sending a data frame.')
                 while len(frame) > self._out_flow_control_window:
-                    logging.info('Flow control window not large enough, waiting for more')
-                    print('Flow control window not large enough, waiting for more')
+                    logging.info('Flow control window not large enough, waiting for more.')
                     yield from self._outgoing_window_update.wait()
 
                # Reduce our outgoing window.
                 self._out_flow_control_window -= len(frame)
 
-            print('seralizing bytes to send')
             frame_bytes = frame.serialize()
-            print('actually writing bytes')
             self.writer.write(frame_bytes)
             logging.info('Sending off frame, stream_id: %s' % frame.stream_id)
-            print('Sending off frame, stream_id: %s' % frame.stream_id)
             yield from self.writer.drain()
-        print('CO ROUTINE CLOSING CONNECTION')
+
         yield from self.close_connection()
 
 
@@ -267,15 +230,12 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
     def start_reader_task(self):
         # Pause until the connection header has been exchanged by both sides.
         logging.info('Reader task waiting for connection exchange')
-        print('Reader task waiting for connection exchange')
         yield from self._connection_header_exchanged
         logging.info('Connection header done in reader task.')
-        print('Connection header done in reader task.')
 
         # Can also set a value to the connection closed future, like the last
         # frame that was processed or the reason we're closing the connection?
         logging.info('starting main reader task loop')
-        print('starting main reader task loop')
         while not self._connection_closed.done():
             # Parse a single frame from the connection.
             try:
@@ -283,58 +243,41 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
             # TODO(roasbeef): Need to properly handle this within FrameParser.
             except:
                 break
-            logging.info('Reader POPPED OFF CONNECTION FRAME')
-            print('Reader POPPED OFF CONNECTION FRAME')
-            logging.info('FrameType: %s' % frame.frame_type)
-            print('FrameType: %s' % frame.frame_type)
-            logging.info('SteamId: %s' % frame.stream_id)
-            print('SteamId: %s' % frame.stream_id)
-            logging.info('Length: %s' % len(frame))
-            print('Length: %s' % len(frame))
-            if isinstance(frame, DataFrame) or isinstance(frame, HeadersFrame):
-                logging.info('Data: %s' % frame.data)
-                print('Data: %s' % frame.data)
+            logging.info('Reader popped frame from queue: %s' % frame)
 
-            print('STREAM IDS: %s' % self._streams.keys())
+            logging.info('STREAM IDS: %s' % self._streams.keys())
             # Connection specific frame. Handle it, async style!
             if frame.stream_id == 0:
                 logging.info('Handling connection frame.')
-                print('Handling connection frame.')
                 asyncio.async(self.handle_connection_frame(frame))
             # Frame for streams we're already aware of.
             elif frame.stream_id in self._streams:
                 logging.info('got frame from an already known stream')
-                print('got frame from an already known stream')
                 # The other side is promising a push on a new steam id.
                 if isinstance(frame, PushPromise):
                     asyncio.async(self.process_push_promise(frame))
                 # Otherwise, it's business as usual.
                 else:
                     logging.info('Feeding frame to stream_id: %s' % frame.stream_id)
-                    print('Feeding frame to stream_id: %s' % frame.stream_id)
                     self._streams[frame.stream_id].process_frame(frame)
             # Should be a new headers or pushpromise frame at this point.
             elif not self._is_client:
                 logging.info('Entering server specific code path.')
-                print('Entering server specific code path.')
                 # We've received a new request. So create a new stream, and
                 # assign it the received stream id from the frame.
                 if isinstance(frame, HeadersFrame):
                     logging.info('Got a new request header frame')
-                    print('Got a new request header frame')
                     if FrameFlag.PRIORITY in frame.flags:
                         new_request_stream = self._new_stream(stream_id=frame.stream_id,
                                                               priority=frame.priority)
                     else:
                         new_request_stream = self._new_stream(stream_id=frame.stream_id)
                     logging.info('Giving frame to new stream')
-                    print('Giving frame to new stream')
                     new_request_stream.process_frame(frame)
                     # Create new task which will wait for all the neccessary
                     # frames to be sent on this stream, and then process the
                     # request.
                     logging.info('Creating new task to handle request.')
-                    print('Creating new task to handle request.')
                     response_task = asyncio.async(new_request_stream.consume_request())
                     # Close off the stream after the response is sent.
                     #response_task.add_done_callback(new_request_stream.close())
@@ -345,18 +288,17 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
         print('GOT PUSH PROMISE')
         # Server shouldn't receive a push promise. ConnectionError.
         if not self._is_client:
-            print("IGNORING SERVER DOESN'T DO PUSH PROMISES")
+            logger.info("IGNORING SERVER DOESN'T DO PUSH PROMISES")
             pass
         # Reject the PushPromise if we're not accepting them. Send a
         # RstStreamFrame. ProtocolError.
         elif self._settings.get(ConnectionSetting.ENABLE_PUSH) is not None:
-            print('HAVE A VALUE FOR PUSH PROMISES')
             pass
         # Otherwise, we'll accept the promise on a new stream.
         else:
             # Do something with the headers. Trigger callbacks set up by the
             # client.
-            print('CLIENT ACCEPTING PUSH PROMISE')
+            logger.info('CLIENT ACCEPTING PUSH PROMISE')
             promised_stream = self._new_stream(stream_id=frame.promised_stream_id)
             promised_stream.state = StreamState.RESERVED_REMOTE
 
@@ -383,7 +325,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
     @asyncio.coroutine
     def close_connection(self, go_away_frame=None):
         logging.info('Closing connection')
-        print('CLOSIN CONNECTION')
         # some shit with futures for the running tasks.
         self._reader_task.cancel()
         self._writer_task.cancel()
@@ -402,7 +343,6 @@ class HTTP2CommonProtocol(asyncio.StreamReaderProtocol):
 
     def connection_lost(self, exc):
         logger.info('Connection has been lost')
-        print('CONNECTION LOST')
         if not self._connection_closed.done():
             self._connection_closed.set_result(True)
         super().connection_lost(exc)

@@ -16,12 +16,10 @@ if not logger.handlers:
 
 class HTTP2Server(HTTP2CommonProtocol):
     def __init__(self, route_handler, server_settings):
-        logger.info('protocol class created')
         self._server_settings = server_settings
         self._handler = route_handler
         self._routes = {}
         super().__init__(is_client=False)
-        logger.info('server constructor created')
 
 
     def connection_made(self, transport):
@@ -29,16 +27,13 @@ class HTTP2Server(HTTP2CommonProtocol):
         super().connection_made(transport)
         logging.info('Waiting for handhskae')
         asyncio.async(self.settings_handshake())
-        logging.info('Handhske completed')
 
     @asyncio.coroutine
     def settings_handshake(self):
         logging.info('Trying to read handshake bytes')
-        print('Trying to read handshake bytes')
         handshake_bytes = yield from self.reader.read(24)
         if handshake_bytes == HANDSHAKE_CODE:
-            logging.info('HANDSHAKE BYTES GOT')
-            print('HANDSHAKE BYTES GOT')
+            logging.info('Server got the client connection header')
             header_bytes = yield from self.reader.read(8)
             frame_header = FrameHeader.from_raw_bytes(header_bytes)
 
@@ -46,21 +41,18 @@ class HTTP2Server(HTTP2CommonProtocol):
             frame = Frame.from_frame_header(frame_header)
 
             frame.deserialize(payload_bytes)
-            logging.info('GOT THE INITIAL SETTINGS FRAME')
-            print('GOT THE INITIAL SETTINGS FRAME')
+            logging.info('Server got initial settings frame.')
             self.update_settings(frame)
 
-            logging.info('SENDING OUR SETTINGS FRAME')
-            print('SENDING OUR SETTINGS FRAME')
+            logging.info('Server sending its settings frame.')
             our_settings = SettingsFrame(stream_id=0, settings=self._server_settings)
             self.writer.write(our_settings.serialize())
 
             # Off to the races.
-            logging.info('HANDSHKAE DUNZO')
-            print('HANDSHKAE DUNZO')
+            logging.info('Server handshake done.')
             self._connection_header_exchanged.set_result(True)
         else:
-            logging.info('HANDSHKE BYTES ARE MESSED UP')
+            logging.info('Client handshake invalid.')
             yield from self.close_connection()
 
     @asyncio.coroutine
@@ -78,7 +70,6 @@ class HTTP2Server(HTTP2CommonProtocol):
 @asyncio.coroutine
 def serve(route_handler, http2_settings, port, host=None, *,
           klass=HTTP2Server, **kwargs):
-    logger.info('creating server.')
     return (yield from asyncio.get_event_loop().create_server(
         lambda: klass(route_handler, http2_settings), host, port, **kwargs)
     )

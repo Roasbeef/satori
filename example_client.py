@@ -22,13 +22,13 @@ def client_example():
     print(resp.status_code)
 
     # Task to send out what was read, can be iterated over.
-    print((yield from resp.read_body()))
+    print("Client has response: ", (yield from resp.read_body()))
 
     print('TRYING BATCH REQUEST')
     requests = [asyncio.Task(conn.request('GET', '/')) for _ in range(10)]
     for response_future in asyncio.as_completed(requests):
         print('RESP HAS BEEN COMPLETED')
         completed_resp = yield from response_future
-        print((yield from completed_resp.read_body()))
+        print("Client has batch response: ", (yield from completed_resp.read_body()))
 
 asyncio.get_event_loop().run_until_complete(client_example())
